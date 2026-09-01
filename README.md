@@ -10,7 +10,7 @@ The server routes messages. It cannot read them.
 | Phase | What it adds | State |
 |-------|--------------|-------|
 | 0 | Repo, package layout, toolchain | **done** |
-| 1 | Sockets, framing, frozen protocol | not started |
+| 1 | Sockets, framing, frozen protocol | **done** |
 | 2 | Server core: registries, router, presence | not started |
 | 3 | Headless client: connection, model, console view | not started |
 | 4 | Rooms and concurrent conversations | not started |

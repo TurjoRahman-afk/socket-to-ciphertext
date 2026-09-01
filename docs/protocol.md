@@ -1,8 +1,9 @@
 # Wire protocol
 
-> **Status: DRAFT.** This document is frozen at the end of phase 1. Once frozen,
-> the server track and the client track can proceed in parallel against it.
-> Every teammate signs off before any client code is written.
+> **Status: FROZEN as of phase 1.** The server track and the client track now
+> proceed in parallel against this document. Changing anything below needs
+> agreement from both, and a bump of `v`. Implemented by `im/common/frames.py`
+> and `im/common/codec.py`, and covered by `tests/test_codec.py`.
 
 ## Framing
 
@@ -64,3 +65,31 @@ because the server has to route what it cannot read.
 The client sends `PING` on an interval. Two missed `PONG` replies move the
 connection out of `ONLINE` and into `RETRYING`, which reconnects with
 exponential backoff.
+
+## Limits
+
+| Limit | Value | Why |
+|-------|-------|-----|
+| Maximum line length | 1 MiB | A peer that opens a connection and streams bytes without ever sending a newline would otherwise grow the receive buffer until the server runs out of memory. Exceeding it closes the connection. |
+| Encoding | UTF-8, never escaped | Non-ASCII travels as itself, so a packet trace stays readable during the demo and fewer bytes go on the wire. |
+| Line ending | `
+` | A trailing `` is stripped on receipt, so a telnet session on Windows works by hand. |
+
+## Error codes
+
+| Code | Meaning |
+|------|---------|
+| `BAD_FRAME` | The line was not valid JSON, or not a valid frame. The connection stays open. |
+| `LINE_TOO_LONG` | The line-length limit was exceeded. The connection is closed. |
+
+## Notes for implementers
+
+- `from` is a reserved word in Python, so `Frame` names that attribute
+  `sender`. This affects only the Python code -- the wire name is `from`.
+- Fields that are `None` are omitted from the encoded object rather than sent
+  as `null`. A receiver must treat "absent" and "null" identically.
+- Type-specific payload (`user`, `room`, `pubkey`, ...) is flattened to the top
+  level of the object rather than nested. Those keys may not collide with the
+  reserved field names in the table above.
+- Never assume one `recv()` returns one frame. Buffer the bytes and split on
+  the delimiter; `LineBuffer` is the only place in the project that does this.
