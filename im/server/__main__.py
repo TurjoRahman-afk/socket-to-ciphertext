@@ -24,9 +24,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=DEFAULT_HOST,
         help="interface to bind (use 0.0.0.0 to accept connections from other machines)",
     )
-    parser.add_argument(
-        "--port", type=int, default=DEFAULT_PORT, help="port to listen on"
-    )
+    parser.add_argument("--port", type=int, default=DEFAULT_PORT, help="port to listen on")
     return parser.parse_args(argv)
 
 

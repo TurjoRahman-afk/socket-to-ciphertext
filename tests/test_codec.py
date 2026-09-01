@@ -1,1 +1,5 @@
-"""Frame round-trips, split reads, two frames in one packet, malformed lines, UTF-8 with Chinese characters and emoji. Phase 1."""
+"""Codec tests. Phase 1.
+
+Frame round-trips, split reads, two frames arriving in one packet, malformed
+lines, and UTF-8 with Chinese characters and emoji.
+"""

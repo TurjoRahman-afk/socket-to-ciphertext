@@ -44,11 +44,18 @@ python -m im.client             # starts a client
 Both accept `--help`. The server takes `--host` and `--port`; bind `0.0.0.0`
 when you want to reach it from another machine on the same network.
 
-## Tests
+## Tests and tooling
 
 ```bash
-pytest
+pytest                  # run the suite (hung tests fail after 30s)
+pytest --cov            # with coverage, for the report
+ruff check .            # lint
+ruff format .           # format
 ```
+
+Configuration lives in `pyproject.toml`. Everything the running system needs is
+in the standard library except `cryptography`; the rest of `requirements.txt`
+is development tooling.
 
 ## Layout
 

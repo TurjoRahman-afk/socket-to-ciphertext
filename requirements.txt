@@ -1,5 +1,42 @@
-# Phase 6 -- end-to-end encryption (X25519, HKDF, AES-GCM)
+# Socket to Ciphertext -- dependencies
+#
+# This project runs on the standard library by design. Sockets, threading,
+# queues, JSON, SQLite, TLS and the Tkinter GUI all ship with Python 3.11, so
+# the list below is short on purpose and should stay that way. Before adding
+# anything here, check whether the stdlib already covers it.
+#
+#   pip install -r requirements.txt
+
+# ---------------------------------------------------------------- runtime ---
+
+# The only third-party dependency the running system has.
+# Phase 6: X25519 key agreement, HKDF, AES-GCM sealing, and generating the
+# self-signed development certificate for TLS. Never hand-roll a cipher.
 cryptography>=42.0
 
-# Tests -- phase 1 onward
+# ------------------------------------------------------------ development ---
+# Not needed to run the system, only to work on it.
+
+# Test runner. Phase 1 onward.
 pytest>=8.0
+
+# Fails a hung test instead of hanging forever. This project is threads and
+# blocking sockets: a deadlock or a recv() that never returns would otherwise
+# stall the suite indefinitely. Configured in pyproject.toml.
+pytest-timeout>=2.3
+
+# Coverage numbers, worth quoting in the report:
+#   pytest --cov
+pytest-cov>=5.0
+
+# Linter and formatter in one, fast, no configuration beyond pyproject.toml.
+# Keeps a team's style consistent without arguing about it:
+#   ruff check .      ruff format .
+ruff>=0.6
+
+# --------------------------------------------------------- NOT needed here ---
+# bcrypt / argon2      hashlib.scrypt is stdlib and is a proper password KDF
+# pyOpenSSL            the ssl module plus cryptography cover TLS and certs
+# requests / aiohttp   there is no HTTP anywhere in this system
+# an ORM               sqlite3 with hand-written SQL is the point of phase 5
+# a GUI toolkit        tkinter ships with Python

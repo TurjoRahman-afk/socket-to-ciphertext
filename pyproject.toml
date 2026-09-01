@@ -1,0 +1,30 @@
+# Tool configuration only. The project is run as `python -m im.server`, not
+# installed as a package, so there is deliberately no [project] table here.
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+# A hung test fails instead of blocking forever. This matters more than usual
+# here: every phase from 1 onward involves blocking socket calls and worker
+# threads, where the natural failure mode is a deadlock, not an exception.
+# Raise it for one slow test with @pytest.mark.timeout(60).
+timeout = 30
+
+[tool.coverage.run]
+source = ["im"]
+omit = ["*/__main__.py"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "F",   # pyflakes -- unused imports, undefined names
+    "W",   # pycodestyle warnings
+    "I",   # import sorting
+    "UP",  # prefer modern Python idioms
+    "B",   # bugbear -- likely bugs, including mutable default arguments
+]
