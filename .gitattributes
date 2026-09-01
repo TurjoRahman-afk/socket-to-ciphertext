@@ -1,0 +1,5 @@
+# Normalise line endings so teammates on Windows, macOS and Linux see the same
+# bytes. The protocol itself is newline-delimited; keep the repo consistent.
+* text=auto eol=lf
+*.png binary
+*.pem binary

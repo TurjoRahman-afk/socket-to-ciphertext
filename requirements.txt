@@ -1,0 +1,5 @@
+# Phase 6 -- end-to-end encryption (X25519, HKDF, AES-GCM)
+cryptography>=42.0
+
+# Tests -- phase 1 onward
+pytest>=8.0
