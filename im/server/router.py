@@ -30,9 +30,9 @@ OFFLINE = "OFFLINE"
 class MessageRouter:
     def __init__(
         self,
-        sessions: SessionRegistry,
-        rooms: RoomRegistry,
-        users: InMemoryUsers,
+        sessions: SessionRegistry,      # who is online right now
+        rooms: RoomRegistry,            # who is in which room
+        users: InMemoryUsers,           # who has an account
     ) -> None:
         self.sessions = sessions
         self.rooms = rooms
