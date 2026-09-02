@@ -7,6 +7,7 @@ no key derivation function yet, so identical passwords still produce identical
 digests. Phase 5 replaces this with a salt and hashlib.scrypt.
 """
 
+# it's a small in memory user/account database
 from __future__ import annotations
 
 import hmac
@@ -22,8 +23,8 @@ class InMemoryUsers:
     """
 
     def __init__(self) -> None:
-        self._lock = threading.Lock()
-        self._digests: dict[str, str] = {}
+        self._lock = threading.Lock()           # protects the dictionary
+        self._digests: dict[str, str] = {}      #stores username
 
     def register(self, username: str, pass_hash: str) -> bool:
         """Create an account. False if the name is taken."""
