@@ -10,7 +10,7 @@ import argparse
 import logging
 
 from im import __version__
-from im.server.server import EchoServer
+from im.server.server import ChatServer
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 5000
@@ -39,11 +39,11 @@ def main(argv: list[str] | None = None) -> int:
         datefmt="%H:%M:%S",
     )
 
-    server = EchoServer(args.host, args.port)
+    server = ChatServer(args.host, args.port)
     host, port = server.bind()
     print(f"Socket to Ciphertext -- server {__version__}")
     print(f"  listen   {host}:{port}")
-    print("  phase    1 (echo server -- routing lands in phase 2)")
+    print("  phase    2 (routing: LOGIN, MSG, PRESENCE)")
     print(f"  try      telnet {host} {port}")
     print("  stop     Ctrl-C")
 

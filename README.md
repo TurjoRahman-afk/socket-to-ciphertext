@@ -11,7 +11,7 @@ The server routes messages. It cannot read them.
 |-------|--------------|-------|
 | 0 | Repo, package layout, toolchain | **done** |
 | 1 | Sockets, framing, frozen protocol | **done** |
-| 2 | Server core: registries, router, presence | not started |
+| 2 | Server core: registries, router, presence | **done** |
 | 3 | Headless client: connection, model, console view | not started |
 | 4 | Rooms and concurrent conversations | not started |
 | 5 | Persistence, accounts, offline delivery | not started |

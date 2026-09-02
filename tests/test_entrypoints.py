@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import im.client.__main__ as client_main
 import im.server.__main__ as server_main
-from im.server.server import EchoServer
+from im.server.server import ChatServer
 
 
 def test_server_parses_host_and_port() -> None:
@@ -27,11 +27,11 @@ def test_server_binds_prints_a_banner_and_shuts_down(monkeypatch, capsys) -> Non
     serve_forever is stubbed out -- the accept loop is tested elsewhere, and
     left real it would block here forever."""
     served = []
-    monkeypatch.setattr(EchoServer, "serve_forever", lambda self: served.append(True))
+    monkeypatch.setattr(ChatServer, "serve_forever", lambda self: served.append(True))
     shutdowns = []
-    original_shutdown = EchoServer.shutdown
+    original_shutdown = ChatServer.shutdown
     monkeypatch.setattr(
-        EchoServer,
+        ChatServer,
         "shutdown",
         lambda self: (shutdowns.append(True), original_shutdown(self))[1],
     )
@@ -49,14 +49,14 @@ def test_server_shuts_down_on_keyboard_interrupt(monkeypatch) -> None:
     """Ctrl-C is the documented way to stop it, so it must close the socket
     rather than leaving the port held."""
 
-    def interrupt(self: EchoServer) -> None:
+    def interrupt(self: ChatServer) -> None:
         raise KeyboardInterrupt
 
-    monkeypatch.setattr(EchoServer, "serve_forever", interrupt)
+    monkeypatch.setattr(ChatServer, "serve_forever", interrupt)
     shutdowns = []
-    original_shutdown = EchoServer.shutdown
+    original_shutdown = ChatServer.shutdown
     monkeypatch.setattr(
-        EchoServer,
+        ChatServer,
         "shutdown",
         lambda self: (shutdowns.append(True), original_shutdown(self))[1],
     )
