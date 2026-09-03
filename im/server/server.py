@@ -22,13 +22,14 @@ log = logging.getLogger(__name__)
 BACKLOG = 32
 
 
-class ChatServer:
+class ChatServer:  # this represents the whole server
     """Accepts connections and routes between them.
 
     One reader thread and one writer thread per client, both daemons, so a
     stuck client can never keep the process alive after shutdown.
     """
 
+    # by default the server will listen on 127.0.0.1:5000
     def __init__(self, host: str = "127.0.0.1", port: int = 5000) -> None:
         self.host = host
         self.port = port
@@ -37,6 +38,7 @@ class ChatServer:
         self.users = InMemoryUsers()
         self.router = MessageRouter(self.sessions, self.rooms, self.users)
 
+        # the listener is none but after bind() it is tcp listening socket
         self._listener: socket.socket | None = None
         self._handlers: set[ClientHandler] = set()
         self._lock = threading.Lock()
@@ -63,7 +65,7 @@ class ChatServer:
         log.info("listening on %s:%s", *self.address)
         return self.address
 
-    def serve_forever(self) -> None:
+    def serve_forever(self) -> None:  # THE heart of the server
         """Accept connections until shutdown() is called."""
         if self._listener is None:
             self.bind()
