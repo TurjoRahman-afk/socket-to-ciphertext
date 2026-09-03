@@ -38,6 +38,8 @@ Listener = Callable[[Event], None]
 
 
 class ChatModel:
+    # this creates the initial state
+    # this is the begining moment
     def __init__(self) -> None:
         self.username: str | None = None
         self.connection_state: str = "DISCONNECTED"
