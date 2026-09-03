@@ -30,13 +30,16 @@ OFFLINE = "OFFLINE"
 class MessageRouter:
     def __init__(
         self,
-        sessions: SessionRegistry,      # who is online right now 
-        rooms: RoomRegistry,            # who is in which room 
-        users: InMemoryUsers,           # who has an account 
+        sessions: SessionRegistry,      # who is online right now
+        rooms: RoomRegistry,            # who is in which room
+        users: InMemoryUsers,           # who has an account
     ) -> None:
-        self.sessions = sessions    # accounts, survives disconnects. "Does alice exists and is this her password"
-        self.rooms = rooms          # live connections. Is Alice online right now ? and how do i reach her ?
-        self.users = users          # membership by name 
+        # live connections. Is Alice online right now ? and how do i reach her ?
+        self.sessions = sessions
+        # membership by name
+        self.rooms = rooms
+        # accounts, survives disconnects. "Does alice exists and is this her password"
+        self.users = users
 
     # ------------------------------------------------------------ inbound ---
 
@@ -145,7 +148,7 @@ class MessageRouter:
         # The id and timestamp are kept so sender and recipient agree on them.
         outgoing = Frame(
             type=MessageType.MSG,
-            sender=session.username,    # from the session, not from the frame 
+            sender=session.username,    # from the session, not from the frame
             to=target,
             body=frame.body,
             nonce=frame.nonce,
