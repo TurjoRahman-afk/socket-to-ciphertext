@@ -93,6 +93,22 @@ class ServerConnection:
     def can_send(self) -> bool:
         return self._machine.can_send
 
+    def listen(
+        self,
+        on_frame: Callable[[Frame], None] | None = None,
+        on_state: Callable[[ConnectionState], None] | None = None,
+    ) -> None:
+        """Attach or replace the listeners after construction.
+
+        The view is usually built after the connection -- it needs the model,
+        which needs nothing -- so this exists to avoid a circular setup, and
+        to keep callers out of the private attributes.
+        """
+        if on_frame is not None:
+            self._on_frame = on_frame
+        if on_state is not None:
+            self._machine._on_change = on_state
+
     # ----------------------------------------------------------- lifecycle ---
 
     def connect(self, timeout: float = 5.0) -> None:

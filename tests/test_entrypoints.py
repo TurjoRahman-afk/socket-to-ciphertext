@@ -65,6 +65,16 @@ def test_server_shuts_down_on_keyboard_interrupt(monkeypatch) -> None:
     assert shutdowns == [True]
 
 
-def test_client_starts_and_prints_a_banner(capsys) -> None:
-    assert client_main.main([]) == 0
-    assert "Socket to Ciphertext" in capsys.readouterr().out
+def test_the_tk_view_says_it_is_not_here_yet(capsys) -> None:
+    """Chosen as the client's entry-point test because it is the one path
+    that returns without prompting for credentials or opening a socket."""
+    assert client_main.main(["--view", "tk"]) == 1
+    assert "phase 7" in capsys.readouterr().out
+
+
+def test_a_password_never_leaves_the_client_in_the_clear() -> None:
+    digest = client_main.hash_password("hunter2")
+    assert "hunter2" not in digest
+    assert len(digest) == 64  # sha256, hex
+    assert digest == client_main.hash_password("hunter2")  # stable
+    assert digest != client_main.hash_password("hunter3")

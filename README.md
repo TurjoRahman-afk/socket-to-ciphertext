@@ -12,26 +12,41 @@ Built as coursework, in nine phases, each one ending in something that runs.
 
 ## What works today
 
-The server accepts many clients at once, authenticates them, and routes
-messages between them. Concretely, right now you can:
+**Two people can hold a conversation.** Start the server, run a client in two
+terminals, and you have a working messenger:
 
-- register an account and log in
-- send a message to another logged-in user, and get an `ACK` back
-- see `PRESENCE` announcements when somebody logs in or drops
-- get a clear error when you message someone who is offline
-- send Chinese text and emoji and have them arrive intact
+```
+$ python -m im.client --user alice --password hunter2 --register
 
-What does **not** work yet: there is no real client (`python -m im.client`
-prints a banner and exits), nothing is saved to disk, nothing is encrypted,
-and there is no GUI. Those are phases 3 through 7.
+  logged in as alice. /help for commands.
+
+[nobody] > /to bob
+
+  -- now talking to bob --
+
+[bob] > hello bob 你好 🔐
+
+  you: hello bob 你好 🔐
+
+[bob] >
+  bob: hi alice, this is bob
+```
+
+Also working: several conversations at once with separate unread counts,
+presence when someone logs in or drops, a clear error when you message someone
+who is offline, and `/who`, `/chats` and `/history`.
+
+What does **not** work yet: nothing is saved to disk, so accounts and history
+vanish when the server restarts; nothing is encrypted; rooms route but cannot
+be joined from a client; and there is no GUI. Those are phases 4 through 7.
 
 | Phase | What it adds | State |
 |-------|--------------|-------|
 | 0 | Repo, package layout, toolchain | **done** |
 | 1 | Sockets, framing, frozen protocol | **done** |
 | 2 | Server core: registries, router, presence | **done** |
-| 3 | Headless client: connection, model, console view | next |
-| 4 | Rooms and concurrent conversations | |
+| 3 | Headless client: connection, model, console view | **done** |
+| 4 | Rooms and concurrent conversations | next |
 | 5 | Persistence, accounts, offline delivery | |
 | 6 | TLS and end-to-end encryption | |
 | 7 | Tkinter interface (design pass first) | |
