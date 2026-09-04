@@ -30,9 +30,9 @@ OFFLINE = "OFFLINE"
 class MessageRouter:
     def __init__(
         self,
-        sessions: SessionRegistry,      # who is online right now
-        rooms: RoomRegistry,            # who is in which room
-        users: InMemoryUsers,           # who has an account
+        sessions: SessionRegistry,  # who is online right now
+        rooms: RoomRegistry,  # who is in which room
+        users: InMemoryUsers,  # who has an account
     ) -> None:
         # live connections. Is Alice online right now ? and how do i reach her ?
         self.sessions = sessions
@@ -62,6 +62,12 @@ class MessageRouter:
 
         if frame.type is MessageType.MSG:
             self._message(session, frame)
+        elif frame.type is MessageType.CREATE_ROOM:
+            self._create_room(session, frame)
+        elif frame.type is MessageType.JOIN:
+            self._join(session, frame)
+        elif frame.type is MessageType.LEAVE:
+            self._leave(session, frame)
         else:
             session.send(error("UNSUPPORTED", f"{frame.type} arrives in a later phase"))
 
@@ -71,10 +77,17 @@ class MessageRouter:
         if username is None:
             return  # Never logged in, so nobody was ever told they arrived.
 
+        # Read the membership before forgetting it, or there is nobody left to
+        # tell that this person has gone.
+        rooms = self.rooms.rooms_of(username)
+
         self.sessions.logout(username)
         self.rooms.forget(username)
         session.username = None
+
         self._announce(username, OFFLINE)
+        for room in rooms:
+            self._broadcast_room_state(room)
 
     # ------------------------------------------------------------ accounts ---
 
@@ -135,6 +148,82 @@ class MessageRouter:
         )
         self._announce(username, ONLINE)
 
+    # --------------------------------------------------------------- rooms ---
+
+    def _create_room(self, session: Session, frame: Frame) -> None:
+        room = self._room_name(session, frame)
+        if room is None:
+            return
+        if not self.rooms.create(room):
+            session.send(error("ROOM_EXISTS", f"{room} already exists -- JOIN it instead"))
+            return
+
+        # Creating a room puts you in it. Creating one you are not a member of
+        # would be a strange thing to want.
+        self.rooms.join(room, session.username)
+        log.info("%s created %s", session.username, room)
+        self._broadcast_room_state(room)
+
+    def _join(self, session: Session, frame: Frame) -> None:
+        room = self._room_name(session, frame)
+        if room is None:
+            return
+        if not self.rooms.exists(room):
+            # Deliberately not created on the fly: a typo would otherwise put
+            # you alone in a room you think other people are already in.
+            session.send(error("NO_SUCH_ROOM", f"{room} does not exist -- CREATE_ROOM first"))
+            return
+
+        self.rooms.join(room, session.username)
+        self._broadcast_room_state(room)
+
+    def _leave(self, session: Session, frame: Frame) -> None:
+        room = self._room_name(session, frame)
+        if room is None:
+            return
+        if session.username not in self.rooms.members(room):
+            session.send(error("NOT_A_MEMBER", f"you are not in {room}"))
+            return
+
+        self.rooms.leave(room, session.username)
+        # Tell the room first, then the person who left -- they are no longer
+        # a member, so the broadcast will not reach them.
+        self._broadcast_room_state(room)
+        session.send(self._room_state(room))
+
+    def _room_name(self, session: Session, frame: Frame) -> str | None:
+        """Validate the `room` field, answering with an error if it is wrong."""
+        room = frame.data.get("room")
+        if not room or not isinstance(room, str):
+            session.send(error("BAD_ROOM", "a room name is required"))
+            return None
+        if not room.startswith(ROOM_PREFIX):
+            session.send(error("BAD_ROOM", f"a room name must start with {ROOM_PREFIX}"))
+            return None
+        if len(room) < 2 or len(room) > 32 or any(c.isspace() for c in room):
+            session.send(error("BAD_ROOM", "a room name is 2-32 characters and has no spaces"))
+            return None
+        return room
+
+    def _room_state(self, room: str) -> Frame:
+        return Frame(
+            type=MessageType.ROOM_STATE,
+            to=room,
+            data={"room": room, "members": sorted(self.rooms.members(room))},
+        )
+
+    def _broadcast_room_state(self, room: str) -> None:
+        """Tell every member who is in the room now.
+
+        Sent to the whole room rather than only to whoever joined, so that
+        everybody's member list stays correct without polling.
+        """
+        state = self._room_state(room)
+        for name in sorted(self.rooms.members(room)):
+            member = self.sessions.get(name)
+            if member is not None:
+                member.send(state)
+
     # ------------------------------------------------------------ delivery ---
 
     def _message(self, session: Session, frame: Frame) -> None:
@@ -148,7 +237,7 @@ class MessageRouter:
         # The id and timestamp are kept so sender and recipient agree on them.
         outgoing = Frame(
             type=MessageType.MSG,
-            sender=session.username,    # from the session, not from the frame
+            sender=session.username,  # from the session, not from the frame
             to=target,
             body=frame.body,
             nonce=frame.nonce,
@@ -177,9 +266,15 @@ class MessageRouter:
         return True
 
     def _to_room(self, session: Session, room: str, outgoing: Frame) -> bool:
+        if not self.rooms.exists(room):
+            session.send(error("NO_SUCH_ROOM", f"{room} does not exist"))
+            return False
+
         members = self.rooms.members(room)
-        if not members:
-            session.send(error("NO_SUCH_ROOM", f"{room} does not exist or has no members"))
+        if session.username not in members:
+            # Otherwise anyone could shout into any room they could name,
+            # without ever appearing in its member list.
+            session.send(error("NOT_A_MEMBER", f"join {room} before sending to it"))
             return False
 
         for name in sorted(members):

@@ -257,3 +257,134 @@ def test_a_name_is_free_again_after_disconnecting(router: MessageRouter) -> None
     log_in(router, again, "bob")
 
     assert again.last().type is MessageType.LOGIN_OK
+
+
+# ------------------------------------------------------------------- rooms ---
+
+
+def create(router: MessageRouter, session: FakeSession, room: str) -> None:
+    router.handle(session, Frame(type=MessageType.CREATE_ROOM, data={"room": room}))
+
+
+def join(router: MessageRouter, session: FakeSession, room: str) -> None:
+    router.handle(session, Frame(type=MessageType.JOIN, data={"room": room}))
+
+
+def leave(router: MessageRouter, session: FakeSession, room: str) -> None:
+    router.handle(session, Frame(type=MessageType.LEAVE, data={"room": room}))
+
+
+def test_creating_a_room_puts_you_in_it(router: MessageRouter) -> None:
+    alice = online(router, "alice")
+
+    create(router, alice, "#general")
+
+    assert router.rooms.members("#general") == {"alice"}
+    state = alice.last()
+    assert state.type is MessageType.ROOM_STATE
+    assert state.data == {"room": "#general", "members": ["alice"]}
+
+
+def test_a_room_cannot_be_created_twice(router: MessageRouter) -> None:
+    alice = online(router, "alice")
+    create(router, alice, "#general")
+    bob = online(router, "bob")
+
+    create(router, bob, "#general")
+
+    assert bob.last().data["code"] == "ROOM_EXISTS"
+
+
+def test_joining_tells_everyone_already_in_the_room(router: MessageRouter) -> None:
+    """So member lists stay correct without anybody polling."""
+    alice = online(router, "alice")
+    bob = online(router, "bob")
+    create(router, alice, "#general")
+    quiet(alice, bob)
+
+    join(router, bob, "#general")
+
+    assert alice.last().data == {"room": "#general", "members": ["alice", "bob"]}
+    assert bob.last().data == {"room": "#general", "members": ["alice", "bob"]}
+
+
+def test_joining_a_room_that_does_not_exist_is_refused(router: MessageRouter) -> None:
+    """A typo would otherwise put you alone in a room you believe is busy."""
+    alice = online(router, "alice")
+
+    join(router, alice, "#typo")
+
+    assert alice.last().data["code"] == "NO_SUCH_ROOM"
+    assert not router.rooms.exists("#typo")
+
+
+def test_leaving_removes_you_and_tells_the_room(router: MessageRouter) -> None:
+    alice = online(router, "alice")
+    bob = online(router, "bob")
+    create(router, alice, "#general")
+    join(router, bob, "#general")
+    quiet(alice, bob)
+
+    leave(router, bob, "#general")
+
+    assert router.rooms.members("#general") == {"alice"}
+    assert alice.last().data["members"] == ["alice"]
+    # Bob is told too, even though the broadcast no longer reaches him.
+    assert bob.last().data["members"] == ["alice"]
+
+
+def test_leaving_a_room_you_are_not_in_is_refused(router: MessageRouter) -> None:
+    alice = online(router, "alice")
+    create(router, alice, "#general")
+    bob = online(router, "bob")
+
+    leave(router, bob, "#general")
+
+    assert bob.last().data["code"] == "NOT_A_MEMBER"
+
+
+@pytest.mark.parametrize("name", ["general", "", "#", "#a room", "#" + "x" * 40, None, 42])
+def test_a_bad_room_name_is_refused(router: MessageRouter, name) -> None:
+    alice = online(router, "alice")
+
+    router.handle(alice, Frame(type=MessageType.CREATE_ROOM, data={"room": name}))
+
+    assert alice.last().data["code"] == "BAD_ROOM"
+
+
+def test_you_must_join_a_room_before_sending_to_it(router: MessageRouter) -> None:
+    """Otherwise anyone could shout into any room they could name."""
+    alice = online(router, "alice")
+    create(router, alice, "#general")
+    bob = online(router, "bob")
+
+    router.handle(bob, Frame(type=MessageType.MSG, to="#general", body="barging in"))
+
+    assert bob.last().data["code"] == "NOT_A_MEMBER"
+
+
+def test_disconnecting_tells_your_rooms_you_have_gone(router: MessageRouter) -> None:
+    alice = online(router, "alice")
+    bob = online(router, "bob")
+    create(router, alice, "#general")
+    join(router, bob, "#general")
+    quiet(alice, bob)
+
+    router.on_disconnect(bob)
+
+    room_states = [f for f in alice.outbox if f.type is MessageType.ROOM_STATE]
+    assert room_states[-1].data["members"] == ["alice"]
+
+
+def test_login_ok_lists_the_rooms_you_are_in(router: MessageRouter) -> None:
+    alice = online(router, "alice")
+    create(router, alice, "#general")
+    create(router, alice, "#random")
+
+    fresh = FakeSession()
+    sign_up(router, fresh, "bob")
+    join(router, alice, "#general")  # no-op, alice is already in
+    log_in(router, fresh, "bob")
+
+    login_ok = next(f for f in fresh.outbox if f.type is MessageType.LOGIN_OK)
+    assert login_ok.data["rooms"] == []  # bob is in none of them yet
