@@ -32,13 +32,28 @@ $ python -m im.client --user alice --password hunter2 --register
   bob: hi alice, this is bob
 ```
 
-Also working: several conversations at once with separate unread counts,
-presence when someone logs in or drops, a clear error when you message someone
-who is offline, and `/who`, `/chats` and `/history`.
+**Rooms work too.** `/create #general`, then anyone can `/join` it:
 
-What does **not** work yet: nothing is saved to disk, so accounts and history
-vanish when the server restarts; nothing is encrypted; rooms route but cannot
-be joined from a client; and there is no GUI. Those are phases 4 through 7.
+```
+[#general] > /members
+
+  #general: alice, bob, carol
+
+[#general] > hello room
+
+  you: hello room
+  ... bob is typing
+  bob: hi from bob
+```
+
+Also working: several conversations at once with separate unread counts, so
+you can hold a 1:1 and a room chat side by side and see which has unread
+messages; presence when someone logs in or drops; typing indicators; and
+`/who`, `/chats`, `/history` and `/rooms`.
+
+What does **not** work yet: nothing is saved to disk, so accounts, rooms and
+history vanish when the server restarts; nothing is encrypted; and there is no
+GUI. Those are phases 5 through 7.
 
 | Phase | What it adds | State |
 |-------|--------------|-------|
@@ -46,8 +61,8 @@ be joined from a client; and there is no GUI. Those are phases 4 through 7.
 | 1 | Sockets, framing, frozen protocol | **done** |
 | 2 | Server core: registries, router, presence | **done** |
 | 3 | Headless client: connection, model, console view | **done** |
-| 4 | Rooms and concurrent conversations | next |
-| 5 | Persistence, accounts, offline delivery | |
+| 4 | Rooms and concurrent conversations | **done** |
+| 5 | Persistence, accounts, offline delivery | next |
 | 6 | TLS and end-to-end encryption | |
 | 7 | Tkinter interface (design pass first) | |
 | 8 | Internet demo, hardening, report | |
@@ -82,16 +97,18 @@ pip install -r requirements.txt
 python -m im.server                      # the hub, on 127.0.0.1:5000
 python -m im.server --host 0.0.0.0       # reachable from other machines
 python -m im.server --port 5050 --quiet
-python -m im.client                      # a banner, until phase 3
+python -m im.client --user alice --password pw --register
+python -m im.client --host 192.168.1.20 --user bob --password pw
 ```
 
 Both accept `--help`. Stop the server with Ctrl-C; it closes its listening
 socket and hangs up on everyone cleanly.
 
-## Trying it by hand
+## Talking to it without the client
 
-There is no client yet, but the protocol is newline-delimited JSON, so any
-tool that speaks TCP will do. Start the server, then in another terminal:
+The protocol is newline-delimited JSON, so any tool that speaks TCP will do.
+Useful for seeing what actually goes over the wire. Start the server, then in
+another terminal:
 
 ```bash
 python - <<'PY'
@@ -205,9 +222,10 @@ a frame, or three frames, or a frame split mid-character. `LineBuffer` in
 [im/common/codec.py](im/common/codec.py) is the only place in the project that
 has to care.
 
-Implemented so far: `REGISTER`, `LOGIN`, `MSG`, `PING`, and the server's
-`OK`, `LOGIN_OK`, `ACK`, `PRESENCE`, `PONG`, `ERROR`. The remaining types are
-declared and specified, and land in later phases.
+Implemented so far: `REGISTER`, `LOGIN`, `MSG`, `CREATE_ROOM`, `JOIN`,
+`LEAVE`, `TYPING`, `PING`, and the server's `OK`, `LOGIN_OK`, `ACK`,
+`ROOM_STATE`, `PRESENCE`, `PONG`, `ERROR`. Only `HISTORY`, `GET_KEY` and `KEY`
+remain, and they land with persistence and encryption in phases 5 and 6.
 
 The full specification, frozen at the end of phase 1, is in
 [docs/protocol.md](docs/protocol.md). Changing anything in it needs agreement
