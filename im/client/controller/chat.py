@@ -58,6 +58,11 @@ class ChatController:
     def ping(self) -> None:
         self.connection.ping()
 
+    def typing(self, on: bool = True) -> None:
+        """Report composing in the conversation on screen, if there is one."""
+        if self.model.active is not None:
+            self.connection.typing(self.model.active, on)
+
     def create_room(self, room: str) -> None:
         self.connection.create_room(room)
 
@@ -80,6 +85,8 @@ class ChatController:
             self._incoming_message(frame)
         elif frame.type is MessageType.PRESENCE:
             self._presence(frame)
+        elif frame.type is MessageType.TYPING:
+            self._typing(frame)
         elif frame.type is MessageType.ROOM_STATE:
             self._room_state(frame)
         elif frame.type is MessageType.LOGIN_OK:
@@ -127,6 +134,15 @@ class ChatController:
         if not user:
             return
         self.model.set_presence(str(user), frame.data.get("state") == "ONLINE")
+
+    def _typing(self, frame: Frame) -> None:
+        """A room hint belongs to the room; a direct one to its sender."""
+        sender = frame.sender
+        target = frame.to or ""
+        if not sender:
+            return
+        key = target if target.startswith(ROOM_PREFIX) else sender
+        self.model.set_typing(key, sender, bool(frame.data.get("on")))
 
     def _room_state(self, frame: Frame) -> None:
         room = frame.data.get("room") or frame.to

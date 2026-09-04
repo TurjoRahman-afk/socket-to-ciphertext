@@ -19,6 +19,7 @@ from im.client.model.events import (
     PresenceChanged,
     RoomMembersChanged,
     RosterReplaced,
+    TypingChanged,
     UnreadChanged,
 )
 
@@ -238,6 +239,43 @@ def test_a_listener_may_unsubscribe_while_handling_an_event(model: ChatModel) ->
 
     assert len(seen) == 1
     assert len(other) == 2
+
+
+def test_typing_is_announced(model: ChatModel, seen: list) -> None:
+    model.set_typing("bob", "bob", True)
+    assert TypingChanged("bob", ("bob",)) in seen
+
+
+def test_several_people_can_type_in_a_room_at_once(model: ChatModel) -> None:
+    model.set_typing("#general", "bob", True)
+    model.set_typing("#general", "carol", True)
+    assert model.typing_in("#general") == ("bob", "carol")
+
+
+def test_repeated_typing_is_not_announced_twice(model: ChatModel, seen: list) -> None:
+    model.set_typing("bob", "bob", True)
+    seen.clear()
+    model.set_typing("bob", "bob", True)
+    assert seen == []
+
+
+def test_a_message_clears_its_senders_typing(model: ChatModel) -> None:
+    """Otherwise a client that goes quiet after pressing Enter would leave
+    'bob is typing' on screen forever."""
+    model.set_typing("bob", "bob", True)
+
+    model.add_message("bob", msg("hello", sender="bob"))
+
+    assert model.typing_in("bob") == ()
+
+
+def test_your_own_message_does_not_clear_somebody_elses_typing(model: ChatModel) -> None:
+    model.set_identity("alice")
+    model.set_typing("#general", "bob", True)
+
+    model.add_message("#general", msg("hi", sender="alice", mine=True))
+
+    assert model.typing_in("#general") == ("bob",)
 
 
 def test_room_membership_is_announced(model: ChatModel, seen: list) -> None:

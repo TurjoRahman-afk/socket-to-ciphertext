@@ -215,6 +215,11 @@ class ServerConnection:
     def ping(self) -> None:
         self.send(Frame(type=MessageType.PING))
 
+    def typing(self, to: str, on: bool = True) -> None:
+        """Tell the other end whether we are composing. A hint, not a message:
+        the server relays it and nobody acknowledges it."""
+        self.send(Frame(type=MessageType.TYPING, to=to, data={"on": bool(on)}))
+
     def create_room(self, room: str) -> None:
         self.send(Frame(type=MessageType.CREATE_ROOM, data={"room": room}))
 

@@ -68,6 +68,8 @@ class MessageRouter:
             self._join(session, frame)
         elif frame.type is MessageType.LEAVE:
             self._leave(session, frame)
+        elif frame.type is MessageType.TYPING:
+            self._typing(session, frame)
         else:
             session.send(error("UNSUPPORTED", f"{frame.type} arrives in a later phase"))
 
@@ -284,6 +286,40 @@ class MessageRouter:
             if member is not None:
                 member.send(outgoing)
         return True
+
+    # -------------------------------------------------------------- typing ---
+
+    def _typing(self, session: Session, frame: Frame) -> None:
+        """Relay a typing hint. Nothing is stored and nothing is acknowledged.
+
+        Every failure here is silent on purpose. A typing indicator is a hint,
+        not a message: answering an unroutable one with an ERROR would spend a
+        round trip telling the user something they do not need to know, and
+        would make the composer flash errors as they type.
+        """
+        target = frame.to
+        if not target:
+            return
+
+        relayed = Frame(
+            type=MessageType.TYPING,
+            sender=session.username,
+            to=target,
+            data={"on": bool(frame.data.get("on"))},
+        )
+
+        if target.startswith(ROOM_PREFIX):
+            members = self.rooms.members(target)
+            if session.username not in members:
+                return
+            recipients = [name for name in sorted(members) if name != session.username]
+        else:
+            recipients = [target]
+
+        for name in recipients:
+            recipient = self.sessions.get(name)
+            if recipient is not None:
+                recipient.send(relayed)
 
     # ------------------------------------------------------------ presence ---
 

@@ -206,6 +206,83 @@ def test_an_unknown_room_is_refused(router: MessageRouter) -> None:
     assert alice.last().data["code"] == "NO_SUCH_ROOM"
 
 
+# ------------------------------------------------------------------ typing ---
+
+
+def typing(router: MessageRouter, session: FakeSession, to: str, on: bool = True) -> None:
+    router.handle(session, Frame(type=MessageType.TYPING, to=to, data={"on": on}))
+
+
+def test_typing_is_relayed_to_the_recipient(router: MessageRouter) -> None:
+    alice = online(router, "alice")
+    bob = online(router, "bob")
+    quiet(alice, bob)
+
+    typing(router, alice, "bob")
+
+    assert bob.last().type is MessageType.TYPING
+    assert bob.last().sender == "alice"
+    assert bob.last().data == {"on": True}
+
+
+def test_typing_is_never_acknowledged(router: MessageRouter) -> None:
+    """It is a hint, not a message. An ACK would double the traffic."""
+    alice = online(router, "alice")
+    online(router, "bob")
+    quiet(alice)
+
+    typing(router, alice, "bob")
+
+    assert alice.outbox == []
+
+
+def test_typing_to_a_room_reaches_the_other_members(router: MessageRouter) -> None:
+    alice = online(router, "alice")
+    bob = online(router, "bob")
+    carol = online(router, "carol")
+    for name in ("alice", "bob", "carol"):
+        router.rooms.join("#general", name)
+    quiet(alice, bob, carol)
+
+    typing(router, alice, "#general")
+
+    assert bob.last().type is MessageType.TYPING
+    assert carol.last().type is MessageType.TYPING
+    assert alice.outbox == []
+
+
+def test_typing_into_a_room_you_are_not_in_is_dropped_silently(router: MessageRouter) -> None:
+    """Answering with an ERROR would make the composer flash as you type."""
+    alice = online(router, "alice")
+    bob = online(router, "bob")
+    router.rooms.join("#general", "bob")
+    quiet(alice, bob)
+
+    typing(router, alice, "#general")
+
+    assert alice.outbox == []
+    assert bob.outbox == []
+
+
+def test_typing_at_somebody_offline_is_dropped_silently(router: MessageRouter) -> None:
+    alice = online(router, "alice")
+    quiet(alice)
+
+    typing(router, alice, "nobody")
+
+    assert alice.outbox == []
+
+
+def test_typing_off_is_relayed_too(router: MessageRouter) -> None:
+    alice = online(router, "alice")
+    bob = online(router, "bob")
+    quiet(alice, bob)
+
+    typing(router, alice, "bob", on=False)
+
+    assert bob.last().data == {"on": False}
+
+
 # ---------------------------------------------------------------- presence ---
 
 

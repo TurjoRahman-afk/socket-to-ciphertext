@@ -28,6 +28,9 @@ class FakeConnection:
     def ping(self) -> None:
         self.sent.append(Frame(type=MessageType.PING))
 
+    def typing(self, to: str, on: bool = True) -> None:
+        self.sent.append(Frame(type=MessageType.TYPING, to=to, data={"on": on}))
+
     def create_room(self, room: str) -> None:
         self.sent.append(Frame(type=MessageType.CREATE_ROOM, data={"room": room}))
 
@@ -48,7 +51,7 @@ def parts() -> tuple[FakeConnection, ChatModel, ChatController]:
 # ------------------------------------------------------- gestures -> frames ---
 
 
-def test_typing_sends_to_the_conversation_on_screen(parts) -> None:
+def test_a_message_goes_to_the_conversation_on_screen(parts) -> None:
     connection, model, controller = parts
     model.set_identity("alice")
     model.select("bob")
@@ -76,7 +79,7 @@ def test_your_own_message_appears_immediately(parts) -> None:
     assert message.body == "hello"
 
 
-def test_typing_with_nobody_selected_sends_nothing(parts) -> None:
+def test_a_message_with_nobody_selected_is_not_sent(parts) -> None:
     connection, _, controller = parts
     assert controller.send("into the void") is None
     assert connection.sent == []
@@ -180,6 +183,45 @@ def test_connection_state_reaches_the_model(parts) -> None:
     _, model, controller = parts
     controller.on_state("ONLINE")
     assert model.connection_state == "ONLINE"
+
+
+# ------------------------------------------------------------------ typing ---
+
+
+def test_typing_goes_to_the_conversation_on_screen(parts) -> None:
+    connection, model, controller = parts
+    model.select("bob")
+
+    controller.typing(True)
+
+    assert connection.sent[0].type is MessageType.TYPING
+    assert connection.sent[0].to == "bob"
+    assert connection.sent[0].data == {"on": True}
+
+
+def test_a_typing_hint_with_nobody_selected_is_not_sent(parts) -> None:
+    connection, _, controller = parts
+    controller.typing(True)
+    assert connection.sent == []
+
+
+def test_a_direct_typing_hint_is_filed_under_its_sender(parts) -> None:
+    _, model, controller = parts
+
+    controller.on_frame(Frame(type=MessageType.TYPING, sender="bob", to="alice", data={"on": True}))
+
+    assert model.typing_in("bob") == ("bob",)
+
+
+def test_a_room_typing_hint_is_filed_under_the_room(parts) -> None:
+    _, model, controller = parts
+
+    controller.on_frame(
+        Frame(type=MessageType.TYPING, sender="bob", to="#general", data={"on": True})
+    )
+
+    assert model.typing_in("#general") == ("bob",)
+    assert model.typing_in("bob") == ()
 
 
 # ------------------------------------------------------------------- rooms ---

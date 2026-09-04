@@ -23,8 +23,8 @@ class InMemoryUsers:
     """
 
     def __init__(self) -> None:
-        self._lock = threading.Lock()           # protects the dictionary
-        self._digests: dict[str, str] = {}      #stores username
+        self._lock = threading.Lock()  # protects the dictionary
+        self._digests: dict[str, str] = {}  # stores username
 
     def register(self, username: str, pass_hash: str) -> bool:
         """Create an account. False if the name is taken."""

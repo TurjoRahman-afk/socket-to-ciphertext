@@ -32,6 +32,7 @@ from im.client.model.events import (
     PresenceChanged,
     RoomMembersChanged,
     RosterReplaced,
+    TypingChanged,
     UnreadChanged,
 )
 
@@ -47,6 +48,7 @@ class ChatModel:
         self.roster: dict[str, bool] = {}
         self.conversations: dict[str, Conversation] = {}
         self.rooms: dict[str, tuple[str, ...]] = {}
+        self.typing: dict[str, set[str]] = {}
         self.active: str | None = None
         self._listeners: list[Listener] = []
 
@@ -124,6 +126,12 @@ class ChatModel:
         before = conversation.unread
         conversation.add(message, active=(key == self.active))
 
+        # Sending a message ends typing. Without this a client that goes
+        # quiet after pressing Enter would leave "bob is typing" on screen
+        # forever, since nothing else clears it.
+        if not message.mine:
+            self.set_typing(key, message.sender, False)
+
         self._emit(MessageAdded(key, message))
         if conversation.unread != before:
             self._emit(UnreadChanged(key, conversation.unread))
@@ -142,6 +150,28 @@ class ChatModel:
         """Open conversations, rooms first so they do not get lost in a list
         of names."""
         return sorted(self.conversations, key=lambda k: (not k.startswith("#"), k.lower()))
+
+    # ---------------------------------------------------------------- typing ---
+
+    def set_typing(self, conversation: str, user: str, typing: bool) -> None:
+        """Record that somebody started or stopped typing.
+
+        A set per conversation, because several people can be typing in a room
+        at once. Nothing here is persisted -- it is a hint about right now.
+        """
+        who = self.typing.setdefault(conversation, set())
+        before = frozenset(who)
+
+        if typing:
+            who.add(user)
+        else:
+            who.discard(user)
+
+        if frozenset(who) != before:
+            self._emit(TypingChanged(conversation, tuple(sorted(who))))
+
+    def typing_in(self, conversation: str) -> tuple[str, ...]:
+        return tuple(sorted(self.typing.get(conversation, ())))
 
     # ----------------------------------------------------------------- rooms ---
 

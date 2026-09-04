@@ -48,6 +48,14 @@ class UnreadChanged:
 
 
 @dataclass(frozen=True, slots=True)
+class TypingChanged:
+    """Who is currently typing in a conversation. A hint, never stored."""
+
+    conversation: str
+    users: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class RoomMembersChanged:
     """Who is in a room now. Sent by the server on every join and leave, so a
     view never has to ask."""
@@ -86,6 +94,7 @@ Event = (
     | PresenceChanged
     | MessageAdded
     | UnreadChanged
+    | TypingChanged
     | RoomMembersChanged
     | ConversationSelected
     | ConnectionStateChanged

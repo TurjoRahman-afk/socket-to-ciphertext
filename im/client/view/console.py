@@ -34,6 +34,7 @@ from im.client.model.events import (
     PresenceChanged,
     RoomMembersChanged,
     RosterReplaced,
+    TypingChanged,
 )
 from im.common.frames import Frame
 
@@ -48,6 +49,7 @@ HELP = """
   /leave #room       leave a room
   /rooms             rooms you are in
   /members           who is in the room on screen
+  /typing on|off     announce that you are composing
 
   /help              this
   /quit              leave
@@ -162,6 +164,10 @@ class ConsoleView:
             print("  rooms:", ", ".join(rooms) if rooms else "(none -- try /create #general)")
         elif command == "/members":
             self._members()
+        elif command == "/typing":
+            # A line-based console never sees a keystroke, so this is
+            # manual. The Tk view will fire it from a key binding.
+            self.controller.typing(argument != "off")
         else:
             print(f"  ! unknown command {command} -- try /help")
 
@@ -204,6 +210,11 @@ class ConsoleView:
                     f"\n  [{event.conversation}] {event.message.sender}: "
                     f"{event.message.body}   ({unread} unread)"
                 )
+        elif isinstance(event, TypingChanged):
+            if event.users and event.conversation == self.model.active:
+                who = ", ".join(event.users)
+                verb = "is" if len(event.users) == 1 else "are"
+                print(f"\n  ... {who} {verb} typing")
         elif isinstance(event, RoomMembersChanged):
             who = ", ".join(event.members) if event.members else "nobody"
             print(f"\n  * {event.room}: {who}")
