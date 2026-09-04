@@ -32,6 +32,7 @@ from im.client.model.events import (
     Event,
     MessageAdded,
     PresenceChanged,
+    RoomMembersChanged,
     RosterReplaced,
 )
 from im.common.frames import Frame
@@ -41,6 +42,13 @@ HELP = """
   /who               who is online
   /history           replay the conversation on screen
   /chats             conversations, with unread counts
+
+  /create #room      make a room and join it
+  /join #room        join a room somebody else made
+  /leave #room       leave a room
+  /rooms             rooms you are in
+  /members           who is in the room on screen
+
   /help              this
   /quit              leave
 
@@ -147,8 +155,41 @@ class ConsoleView:
             self._history()
         elif command == "/chats":
             self._chats()
+        elif command in ("/create", "/join", "/leave"):
+            self._room_command(command, argument)
+        elif command == "/rooms":
+            rooms = self.model.my_rooms()
+            print("  rooms:", ", ".join(rooms) if rooms else "(none -- try /create #general)")
+        elif command == "/members":
+            self._members()
         else:
             print(f"  ! unknown command {command} -- try /help")
+
+    def _room_command(self, command: str, room: str) -> None:
+        if not room:
+            print(f"  ! usage: {command} #roomname")
+            return
+        if not room.startswith("#"):
+            # Caught here so an obvious mistake does not need a round trip.
+            print("  ! a room name starts with # -- try /join #general")
+            return
+
+        if command == "/create":
+            self.controller.create_room(room)
+        elif command == "/join":
+            self.controller.join(room)
+        else:
+            self.controller.leave(room)
+            if self.model.active == room:
+                self.controller.select(None)
+
+    def _members(self) -> None:
+        room = self.model.active
+        if room is None or not room.startswith("#"):
+            print("  ! not in a room -- /to #general first")
+            return
+        members = self.model.room_members(room)
+        print(f"  {room}:", ", ".join(members) if members else "(nobody)")
 
     # ------------------------------------------------------------ rendering ---
 
@@ -163,6 +204,9 @@ class ConsoleView:
                     f"\n  [{event.conversation}] {event.message.sender}: "
                     f"{event.message.body}   ({unread} unread)"
                 )
+        elif isinstance(event, RoomMembersChanged):
+            who = ", ".join(event.members) if event.members else "nobody"
+            print(f"\n  * {event.room}: {who}")
         elif isinstance(event, PresenceChanged):
             print(f"\n  * {event.user} is {'online' if event.online else 'offline'}")
         elif isinstance(event, ConversationSelected):

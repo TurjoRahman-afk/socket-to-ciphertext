@@ -58,6 +58,15 @@ class ChatController:
     def ping(self) -> None:
         self.connection.ping()
 
+    def create_room(self, room: str) -> None:
+        self.connection.create_room(room)
+
+    def join(self, room: str) -> None:
+        self.connection.join(room)
+
+    def leave(self, room: str) -> None:
+        self.connection.leave(room)
+
     # ---------------------------------------------------- frames -> the model ---
 
     def on_frame(self, frame: Frame) -> None:
@@ -71,6 +80,8 @@ class ChatController:
             self._incoming_message(frame)
         elif frame.type is MessageType.PRESENCE:
             self._presence(frame)
+        elif frame.type is MessageType.ROOM_STATE:
+            self._room_state(frame)
         elif frame.type is MessageType.LOGIN_OK:
             self._logged_in(frame)
         elif frame.type is MessageType.ERROR:
@@ -116,6 +127,13 @@ class ChatController:
         if not user:
             return
         self.model.set_presence(str(user), frame.data.get("state") == "ONLINE")
+
+    def _room_state(self, frame: Frame) -> None:
+        room = frame.data.get("room") or frame.to
+        if not room:
+            return
+        members = frame.data.get("members") or []
+        self.model.set_room_members(str(room), [str(name) for name in members])
 
     def _logged_in(self, frame: Frame) -> None:
         username = frame.data.get("user")

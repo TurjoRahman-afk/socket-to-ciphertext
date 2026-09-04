@@ -30,6 +30,7 @@ from im.client.model.events import (
     IdentityEstablished,
     MessageAdded,
     PresenceChanged,
+    RoomMembersChanged,
     RosterReplaced,
     UnreadChanged,
 )
@@ -45,6 +46,7 @@ class ChatModel:
         self.connection_state: str = "DISCONNECTED"
         self.roster: dict[str, bool] = {}
         self.conversations: dict[str, Conversation] = {}
+        self.rooms: dict[str, tuple[str, ...]] = {}
         self.active: str | None = None
         self._listeners: list[Listener] = []
 
@@ -140,6 +142,30 @@ class ChatModel:
         """Open conversations, rooms first so they do not get lost in a list
         of names."""
         return sorted(self.conversations, key=lambda k: (not k.startswith("#"), k.lower()))
+
+    # ----------------------------------------------------------------- rooms ---
+
+    def set_room_members(self, room: str, members: list[str]) -> None:
+        """Record who is in a room, as the server last reported it."""
+        ordered = tuple(sorted(members))
+        if self.rooms.get(room) == ordered:
+            return
+        self.rooms[room] = ordered
+        self.conversation(room)  # so a joined room shows up in the chat list
+        self._emit(RoomMembersChanged(room, ordered))
+
+    def room_members(self, room: str) -> tuple[str, ...]:
+        return self.rooms.get(room, ())
+
+    def my_rooms(self) -> list[str]:
+        """Rooms this user is currently in.
+
+        Derived from membership rather than tracked separately, so there is no
+        second copy of the truth to fall out of step with the server.
+        """
+        if self.username is None:
+            return []
+        return sorted(room for room, members in self.rooms.items() if self.username in members)
 
     # ---------------------------------------------------------------- errors ---
 

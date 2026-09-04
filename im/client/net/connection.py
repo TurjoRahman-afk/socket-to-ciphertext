@@ -215,6 +215,15 @@ class ServerConnection:
     def ping(self) -> None:
         self.send(Frame(type=MessageType.PING))
 
+    def create_room(self, room: str) -> None:
+        self.send(Frame(type=MessageType.CREATE_ROOM, data={"room": room}))
+
+    def join(self, room: str) -> None:
+        self.send(Frame(type=MessageType.JOIN, data={"room": room}))
+
+    def leave(self, room: str) -> None:
+        self.send(Frame(type=MessageType.LEAVE, data={"room": room}))
+
     # -------------------------------------------------------------- private ---
 
     def _require(self, state: ConnectionState, action: str) -> None:

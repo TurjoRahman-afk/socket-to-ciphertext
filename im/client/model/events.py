@@ -48,6 +48,15 @@ class UnreadChanged:
 
 
 @dataclass(frozen=True, slots=True)
+class RoomMembersChanged:
+    """Who is in a room now. Sent by the server on every join and leave, so a
+    view never has to ask."""
+
+    room: str
+    members: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class ConversationSelected:
     conversation: str | None
 
@@ -77,6 +86,7 @@ Event = (
     | PresenceChanged
     | MessageAdded
     | UnreadChanged
+    | RoomMembersChanged
     | ConversationSelected
     | ConnectionStateChanged
     | ErrorRaised

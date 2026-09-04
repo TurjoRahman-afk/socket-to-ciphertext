@@ -28,6 +28,15 @@ class FakeConnection:
     def ping(self) -> None:
         self.sent.append(Frame(type=MessageType.PING))
 
+    def create_room(self, room: str) -> None:
+        self.sent.append(Frame(type=MessageType.CREATE_ROOM, data={"room": room}))
+
+    def join(self, room: str) -> None:
+        self.sent.append(Frame(type=MessageType.JOIN, data={"room": room}))
+
+    def leave(self, room: str) -> None:
+        self.sent.append(Frame(type=MessageType.LEAVE, data={"room": room}))
+
 
 @pytest.fixture
 def parts() -> tuple[FakeConnection, ChatModel, ChatController]:
@@ -171,3 +180,61 @@ def test_connection_state_reaches_the_model(parts) -> None:
     _, model, controller = parts
     controller.on_state("ONLINE")
     assert model.connection_state == "ONLINE"
+
+
+# ------------------------------------------------------------------- rooms ---
+
+
+def test_room_commands_reach_the_connection(parts) -> None:
+    connection, _, controller = parts
+
+    controller.create_room("#general")
+    controller.join("#random")
+    controller.leave("#general")
+
+    assert [(f.type, f.data["room"]) for f in connection.sent] == [
+        (MessageType.CREATE_ROOM, "#general"),
+        (MessageType.JOIN, "#random"),
+        (MessageType.LEAVE, "#general"),
+    ]
+
+
+def test_room_state_records_the_membership(parts) -> None:
+    _, model, controller = parts
+
+    controller.on_frame(
+        Frame(
+            type=MessageType.ROOM_STATE,
+            to="#general",
+            data={"room": "#general", "members": ["bob", "alice"]},
+        )
+    )
+
+    assert model.room_members("#general") == ("alice", "bob")
+
+
+def test_a_joined_room_appears_in_the_chat_list(parts) -> None:
+    _, model, controller = parts
+
+    controller.on_frame(
+        Frame(type=MessageType.ROOM_STATE, data={"room": "#general", "members": ["alice"]})
+    )
+
+    assert "#general" in model.conversations
+
+
+def test_leaving_removes_you_from_your_rooms(parts) -> None:
+    """The model derives membership from the server's list rather than keeping
+    a second copy that could fall out of step."""
+    _, model, controller = parts
+    model.set_identity("alice")
+
+    controller.on_frame(
+        Frame(type=MessageType.ROOM_STATE, data={"room": "#general", "members": ["alice", "bob"]})
+    )
+    assert model.my_rooms() == ["#general"]
+
+    controller.on_frame(
+        Frame(type=MessageType.ROOM_STATE, data={"room": "#general", "members": ["bob"]})
+    )
+    assert model.my_rooms() == []

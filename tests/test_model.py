@@ -17,6 +17,7 @@ from im.client.model.events import (
     IdentityEstablished,
     MessageAdded,
     PresenceChanged,
+    RoomMembersChanged,
     RosterReplaced,
     UnreadChanged,
 )
@@ -237,6 +238,32 @@ def test_a_listener_may_unsubscribe_while_handling_an_event(model: ChatModel) ->
 
     assert len(seen) == 1
     assert len(other) == 2
+
+
+def test_room_membership_is_announced(model: ChatModel, seen: list) -> None:
+    model.set_room_members("#general", ["bob", "alice"])
+    assert RoomMembersChanged("#general", ("alice", "bob")) in seen
+
+
+def test_unchanged_room_membership_is_not_announced(model: ChatModel, seen: list) -> None:
+    model.set_room_members("#general", ["alice"])
+    seen.clear()
+    model.set_room_members("#general", ["alice"])
+    assert seen == []
+
+
+def test_my_rooms_are_derived_from_membership(model: ChatModel) -> None:
+    """No second copy of the truth to fall out of step with the server."""
+    model.set_identity("alice")
+    model.set_room_members("#general", ["alice", "bob"])
+    model.set_room_members("#private", ["bob"])
+
+    assert model.my_rooms() == ["#general"]
+
+
+def test_my_rooms_is_empty_before_logging_in(model: ChatModel) -> None:
+    model.set_room_members("#general", ["alice"])
+    assert model.my_rooms() == []
 
 
 def test_roster_replacement_reports_everyone_known(model: ChatModel, seen: list) -> None:
