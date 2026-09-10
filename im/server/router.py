@@ -15,7 +15,7 @@ import logging
 
 from im.common.frames import Frame, MessageType, error
 from im.server.registries import RoomRegistry, Session, SessionRegistry
-from im.server.store.users import InMemoryUsers
+from im.server.store.users import SqliteUsers
 
 log = logging.getLogger(__name__)
 
@@ -32,7 +32,7 @@ class MessageRouter:
         self,
         sessions: SessionRegistry,  # who is online right now
         rooms: RoomRegistry,  # who is in which room
-        users: InMemoryUsers,  # who has an account
+        users: SqliteUsers,  # who has an account
     ) -> None:
         # live connections. Is Alice online right now ? and how do i reach her ?
         self.sessions = sessions

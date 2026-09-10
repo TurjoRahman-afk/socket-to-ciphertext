@@ -11,7 +11,8 @@ import pytest
 from im.common.frames import Frame, MessageType
 from im.server.registries import RoomRegistry, SessionRegistry
 from im.server.router import MessageRouter
-from im.server.store.users import InMemoryUsers
+from im.server.store.db import Database
+from im.server.store.users import SqliteUsers
 
 HASH = "sha256-of-hunter2"
 
@@ -36,7 +37,11 @@ class FakeSession:
 
 @pytest.fixture
 def router() -> MessageRouter:
-    return MessageRouter(SessionRegistry(), RoomRegistry(), InMemoryUsers())
+    # scrypt_n is dropped to the minimum here on purpose. These tests log in
+    # dozens of times and the real cost factor would add minutes; the
+    # derivation itself is exercised in tests/test_store.py.
+    users = SqliteUsers(Database(), scrypt_n=2)
+    return MessageRouter(SessionRegistry(), RoomRegistry(), users)
 
 
 def sign_up(router: MessageRouter, session: FakeSession, user: str) -> None:
