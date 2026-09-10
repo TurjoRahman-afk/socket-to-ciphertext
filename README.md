@@ -103,7 +103,7 @@ member inside it.
 | 5 | Persistence, accounts, offline delivery | **done** |
 | 6 | TLS and end-to-end encryption | **done** |
 | 7 | Tkinter interface (design pass first) | **done** |
-| 8 | Internet demo, hardening, report | next |
+| 8 | Internet demo, hardening, report | hardening **done**; tunnel and report outstanding |
 
 ---
 
@@ -301,17 +301,24 @@ honestly in [docs/threat-model.md](docs/threat-model.md).
 ## Tests and tooling
 
 ```bash
-pytest                  # 55 tests; a hung test fails after 30s
+pytest                  # 266 tests; a hung test fails after 30s
 pytest --cov            # coverage, for the report
 pytest tests/test_router.py   # routing rules, no sockets, instant
 ruff check .            # lint
 ruff format .           # format
 ```
 
-The suite is split by what each part needs to run. `test_codec.py` and
-`test_router.py` touch no network and finish in milliseconds;
-`test_entrypoints.py` opens real sockets. When something breaks you know
-immediately whether it is your logic or your networking.
+The suite is split by what each part needs to run. `test_codec.py`,
+`test_router.py`, `test_model.py` and `test_crypto.py` touch no network and
+finish in milliseconds; `test_connection.py` and `test_integration.py` open
+real sockets. When something breaks you know immediately whether it is your
+logic or your networking.
+
+`test_integration.py` is the heavy end: three clients in a room, fifty
+messages checked for ordering, twenty clients connected at once, and ten
+clients each sending ten messages into one room simultaneously with every
+message required to arrive exactly once. It also kills a server mid-session
+and checks the client reconnects by itself.
 
 `pytest-timeout` matters more here than in most projects: this is threads and
 blocking sockets, where the natural failure mode is a deadlock rather than an
@@ -345,12 +352,26 @@ through `im/common/` and the protocol document.
 
 ## Known limitations
 
-- Accounts live in memory and vanish when the server restarts (phase 5).
-- A message to an offline user is refused rather than queued (phase 5).
-- Rooms exist in the registry and messages fan out to their members, but no
-  client command creates or joins one yet (phase 4).
+Stated plainly, because an overclaim a marker can puncture is worth less than
+an honest boundary.
+
+- **Room messages are not encrypted.** A frame carries one body, so a room
+  message would need one ciphertext per member inside it. Direct messages are
+  end-to-end encrypted; room messages are protected by TLS alone, which means
+  the server can read them.
+- **No forward secrecy.** Compromising a long-term private key exposes past
+  messages. Real systems ratchet; this one does not.
+- **No key verification.** A malicious server could substitute its own public
+  key in a `GET_KEY` reply and read everything. Mitigating that needs an
+  out-of-band fingerprint check.
+- **The private key file is not encrypted at rest.** Anyone with the unlocked
+  machine can read it.
+- The server learns who talks to whom and when. That is metadata, and only Tor
+  or a mixnet would hide it.
 - One username can only be connected once at a time.
 - No rate limiting, and no cap on the number of accounts.
+- The development certificate is self-signed, so a client must be told to
+  trust it. A real deployment needs one from a certificate authority.
 
 ## Documentation
 
