@@ -76,10 +76,22 @@ A navigation rail, a conversation list with unread counts and presence dots,
 and a message pane with typing indicators. The composer is enabled only while
 the connection is ONLINE.
 
+**It survives the network going away.** A heartbeat notices a link that has
+died without the socket closing, and the client reconnects and logs in again
+by itself:
+
+```
+* connection RETRYING
+  not connected; next attempt in 0.8s
+  reconnect failed: could not reach 127.0.0.1:5821
+  not connected; next attempt in 1.8s
+* connection ONLINE
+  reconnected as alice
+```
+
 What does **not** work yet: room messages are still sent in the clear, because
 a frame carries one body and a room message would need one ciphertext per
-member inside it. Reconnection with exponential backoff and the heartbeat are
-phase 8.
+member inside it.
 
 | Phase | What it adds | State |
 |-------|--------------|-------|

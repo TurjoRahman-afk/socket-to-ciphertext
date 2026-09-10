@@ -15,7 +15,7 @@ import logging
 from im import __version__
 from im.client.controller.chat import ChatController
 from im.client.model.chat import ChatModel
-from im.client.net.connection import ServerConnection
+from im.client.net.session import Session
 from im.client.view.console import ConsoleView
 from im.common.frames import MessageType
 from im.crypto.identity import Identity
@@ -99,13 +99,19 @@ def main(argv: list[str] | None = None) -> int:
         keyring = Keyring(Identity.load_or_create(keyfile))
 
     model = ChatModel()
-    connection = ServerConnection(
+    # A Session rather than a bare connection: it owns the credentials, so it
+    # can log in again by itself when the link drops. The controller cannot
+    # tell the difference.
+    session = Session(
         args.host,
         args.port,
+        username,
+        digest,
+        pubkey=keyring.public_b64 if keyring else None,
         tls=client_context(args.cacert) if args.tls else None,
         server_hostname="localhost" if args.tls else None,
     )
-    controller = ChatController(connection, model, keyring=keyring)
+    controller = ChatController(session, model, keyring=keyring)
 
     # The only line that differs between the two interfaces. Everything
     # below this point is identical, which is the MVC claim made concrete.
@@ -116,41 +122,32 @@ def main(argv: list[str] | None = None) -> int:
     else:
         view = ConsoleView(controller)
 
-    # The connection calls these on its reader thread; both only enqueue, so
-    # the model is still only ever touched by the view's own loop.
-    connection.listen(on_frame=view.post_frame, on_state=view.post_state)
+    # Every reconnection reuses these. Both only enqueue, so the model is
+    # still touched by nothing but the view's own loop.
+    session.on_frame = view.post_frame
+    session.on_state = view.post_state
 
     try:
-        connection.connect()
+        reply = session.start(register=args.register)
     except ConnectionError as exc:
         print(f"  ! {exc}")
         return 1
 
+    if reply.type is MessageType.ERROR:
+        print(f"  ! {reply.data.get('message')}")
+        return 1
+
     try:
-        if args.register:
-            reply = connection.register(
-                username, digest, pubkey=keyring.public_b64 if keyring else None
-            )
-            if reply.type is MessageType.ERROR:
-                print(f"  ! could not register: {reply.data.get('message')}")
-                return 1
-            print(f"  registered {username}")
-
-        reply = connection.login(username, digest)
-        if reply.type is MessageType.ERROR:
-            print(f"  ! could not log in: {reply.data.get('message')}")
-            return 1
-
         # Replay the handshake through the controller so the model learns who
         # we are and who else is here, exactly as it would from any frame.
         controller.on_frame(reply)
-        controller.on_state(str(connection.state))
+        controller.on_state(str(session.state))
 
         if isinstance(view, ConsoleView):
             view.read_stdin_forever()
         view.run()
     finally:
-        connection.close()
+        session.close()
 
     print("\n  bye")
     return 0

@@ -15,6 +15,7 @@ import pytest
 
 from im.client.net.backoff import Backoff
 from im.client.net.connection import ServerConnection
+from im.client.net.session import Session
 from im.client.net.state import ConnectionState
 from im.common.frames import Frame, MessageType
 from im.server.server import ChatServer
@@ -272,3 +273,107 @@ def test_everyone_talking_at_once(server: ChatServer) -> None:
     finally:
         for client in clients:
             client.close()
+
+
+# --------------------------------------------------------------- reconnect ---
+
+
+def start_server(port: int = 0, db: str = ":memory:") -> tuple[ChatServer, threading.Thread]:
+    instance = ChatServer("127.0.0.1", port, db_path=db)
+    instance.bind()
+    thread = threading.Thread(target=instance.serve_forever, daemon=True)
+    thread.start()
+    return instance, thread
+
+
+def test_a_session_comes_back_after_the_server_restarts(tmp_path) -> None:
+    """The phase 8 exit criteria: pull the network and recover.
+
+    The server is killed outright and started again on the same port and the
+    same database. The client is never told to do anything -- the supervisor
+    notices, waits out the backoff and logs in again by itself.
+    """
+    db = str(tmp_path / "im.db")
+    server, thread = start_server(db=db)
+    host, port = server.address
+
+    session = Session(
+        host,
+        port,
+        "alice",
+        HASH,
+        heartbeat_seconds=0.1,
+        backoff=Backoff(first=0.1, factor=1.5, maximum=1.0, jitter=0),
+    )
+    assert session.start(register=True).type is MessageType.LOGIN_OK
+
+    try:
+        server.shutdown()
+        thread.join(timeout=3)
+        assert wait_until(lambda: not session.can_send, timeout=5), "the drop must be noticed"
+
+        # Same port, same database, brand new process-worth of state.
+        server, thread = start_server(port=port, db=db)
+
+        assert wait_until(lambda: session.can_send, timeout=20), "it should come back by itself"
+        assert session.reconnects >= 1
+        assert session.state is ConnectionState.ONLINE
+    finally:
+        session.close()
+        server.shutdown()
+        thread.join(timeout=3)
+
+
+def test_a_session_can_send_again_after_reconnecting(tmp_path) -> None:
+    db = str(tmp_path / "im.db")
+    server, thread = start_server(db=db)
+    host, port = server.address
+
+    inbox: list[Frame] = []
+    bob = None
+    session = Session(
+        host, port, "alice", HASH,
+        heartbeat_seconds=0.1,
+        backoff=Backoff(first=0.1, factor=1.5, maximum=1.0, jitter=0),
+    )
+    session.start(register=True)
+
+    try:
+        server.shutdown()
+        thread.join(timeout=3)
+        assert wait_until(lambda: not session.can_send, timeout=5)
+
+        server, thread = start_server(port=port, db=db)
+        assert wait_until(lambda: session.can_send, timeout=20)
+
+        bob = join(server, "bob", inbox)
+        session.message("bob", "still here 你好")
+
+        assert wait_until(lambda: "still here 你好" in bodies(inbox), timeout=10)
+    finally:
+        if bob is not None:
+            bob.close()
+        session.close()
+        server.shutdown()
+        thread.join(timeout=3)
+
+
+def test_a_session_stops_retrying_when_closed(tmp_path) -> None:
+    """Closing must actually stop the supervisor, not leave a thread dialling
+    a dead server forever."""
+    server, thread = start_server()
+    host, port = server.address
+    session = Session(
+        host, port, "alice", HASH,
+        heartbeat_seconds=0.1,
+        backoff=Backoff(first=0.1, factor=1.0, maximum=0.1, jitter=0),
+    )
+    session.start(register=True)
+
+    server.shutdown()
+    thread.join(timeout=3)
+    session.close()
+    time.sleep(0.5)
+
+    assert session._stopped.is_set()
+    assert not session._supervisor.is_alive() or session._stopped.is_set()
