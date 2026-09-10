@@ -42,6 +42,14 @@ OUTBOX_LIMIT = 100
 #: How long login() and register() wait for the server to answer.
 REPLY_TIMEOUT = 5.0
 
+#: How often the heartbeat sends a PING once the connection is ONLINE.
+HEARTBEAT_SECONDS = 15.0
+
+#: Missed replies before the connection is considered lost. Two rather
+#: than one, so a single dropped packet or a paused server does not tear
+#: down a connection that is really still there.
+MISSED_PONGS = 2
+
 _STOP = object()
 
 
@@ -64,6 +72,7 @@ class ServerConnection:
         on_state: Callable[[ConnectionState], None] | None = None,
         tls: ssl.SSLContext | None = None,
         server_hostname: str | None = None,
+        heartbeat_seconds: float = HEARTBEAT_SECONDS,
     ) -> None:
         self.host = host
         self.port = port
@@ -90,6 +99,11 @@ class ServerConnection:
         self._await_types: frozenset[MessageType] = frozenset()
         self._reply: Frame | None = None
         self._reply_ready = threading.Event()
+
+        # Heartbeat. Counts PINGs sent since the last PONG came back.
+        self._heartbeat: threading.Thread | None = None
+        self._heartbeat_seconds = heartbeat_seconds
+        self._unanswered = 0
 
     # -------------------------------------------------------------- state ---
 
@@ -220,6 +234,7 @@ class ServerConnection:
         if reply.type is MessageType.LOGIN_OK:
             self.username = username
             self._machine.transition(Event.LOGIN_OK)
+            self._start_heartbeat()
         else:
             self._machine.transition(Event.LOGIN_REFUSED)
         return reply
@@ -303,8 +318,47 @@ class ServerConnection:
             raise NotConnected("connection closed during the handshake")
         return reply
 
+    # ----------------------------------------------------------- heartbeat ---
+
+    def _start_heartbeat(self, interval: float | None = None) -> None:
+        """Notice a connection that has died without the socket closing.
+
+        A dropped wifi link or a machine suspended mid-conversation leaves a
+        socket that looks open and never delivers anything again. Only an
+        unanswered PING reveals it.
+        """
+        if self._heartbeat is not None:
+            return
+        interval = self._heartbeat_seconds if interval is None else interval
+        self._unanswered = 0
+        self._heartbeat = threading.Thread(
+            target=self._heartbeat_loop, args=(interval,), name="conn-heartbeat", daemon=True
+        )
+        self._heartbeat.start()
+
+    def _heartbeat_loop(self, interval: float) -> None:
+        while not self._closing.wait(interval):
+            if not self._machine.can_send:
+                return
+            if self._unanswered >= MISSED_PONGS:
+                log.warning(
+                    "%s pings unanswered, treating the connection as lost", self._unanswered
+                )
+                self._on_connection_lost()
+                return
+            self._unanswered += 1
+            try:
+                self.send(Frame(type=MessageType.PING))
+            except NotConnected:
+                return
+
     def _deliver(self, frame: Frame) -> None:
         """Route one decoded frame: to a waiting request, or to the listener."""
+        if frame.type is MessageType.PONG:
+            # Any answer proves the link is alive, so the count resets rather
+            # than merely decrementing.
+            self._unanswered = 0
+
         if frame.type in self._await_types:
             with self._await_lock:
                 self._reply = frame
