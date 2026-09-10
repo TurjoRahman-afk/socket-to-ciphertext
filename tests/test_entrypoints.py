@@ -65,11 +65,17 @@ def test_server_shuts_down_on_keyboard_interrupt(monkeypatch) -> None:
     assert shutdowns == [True]
 
 
-def test_the_tk_view_says_it_is_not_here_yet(capsys) -> None:
-    """Chosen as the client's entry-point test because it is the one path
-    that returns without prompting for credentials or opening a socket."""
-    assert client_main.main(["--view", "tk"]) == 1
-    assert "phase 7" in capsys.readouterr().out
+def test_the_client_offers_both_interfaces() -> None:
+    """One flag chooses between them; everything below the view is identical."""
+    assert client_main.parse_args(["--view", "tk"]).view == "tk"
+    assert client_main.parse_args([]).view == "console"
+
+
+def test_encryption_is_on_unless_it_is_turned_off() -> None:
+    """A client that quietly fell back to plaintext would break the promise
+    the whole of phase 6 exists to make."""
+    assert client_main.parse_args([]).plaintext is False
+    assert client_main.parse_args(["--plaintext"]).plaintext is True
 
 
 def test_a_password_never_leaves_the_client_in_the_clear() -> None:

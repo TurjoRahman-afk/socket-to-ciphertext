@@ -10,3 +10,7 @@ thread drains it in a root.after(50, poll) loop that reschedules itself.
 Calling a widget method from a worker thread corrupts state silently instead
 of raising.
 """
+
+from im.client.view.tk.app import TkView
+
+__all__ = ["TkView"]

@@ -65,9 +65,21 @@ bob reads   :  the secret word is swordfish 🔐
 server holds:  LRg8O4SJrD//F9+Xh3AA2bCg3aH2bbz5u6+H2hp+uB4C1ZCv2sfK65mIhuMTRZHstQ==
 ```
 
+**There is a window, too.** `--view tk` runs the graphical interface over the
+same model as the console one:
+
+```bash
+python -m im.client --view tk --user aya --password pw --register
+```
+
+A navigation rail, a conversation list with unread counts and presence dots,
+and a message pane with typing indicators. The composer is enabled only while
+the connection is ONLINE.
+
 What does **not** work yet: room messages are still sent in the clear, because
 a frame carries one body and a room message would need one ciphertext per
-member inside it. And there is no GUI. Those are phases 6b and 7.
+member inside it. Reconnection with exponential backoff and the heartbeat are
+phase 8.
 
 | Phase | What it adds | State |
 |-------|--------------|-------|
@@ -78,8 +90,8 @@ member inside it. And there is no GUI. Those are phases 6b and 7.
 | 4 | Rooms and concurrent conversations | **done** |
 | 5 | Persistence, accounts, offline delivery | **done** |
 | 6 | TLS and end-to-end encryption | **done** |
-| 7 | Tkinter interface (design pass first) | next |
-| 8 | Internet demo, hardening, report | |
+| 7 | Tkinter interface (design pass first) | **done** |
+| 8 | Internet demo, hardening, report | next |
 
 ---
 
@@ -204,7 +216,7 @@ Two rules hold the concurrency together:
         |
    +----+----+
  console    tk/       two interchangeable views over one model
- (phase 3)  (phase 7)
+ (phase 3)  (phase 7)   both built, both working
 ```
 
 `im/client/model/` may never import `tkinter`. That is not a convention —

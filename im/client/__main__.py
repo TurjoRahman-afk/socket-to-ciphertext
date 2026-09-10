@@ -58,7 +58,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--view",
         choices=("console", "tk"),
         default="console",
-        help="which view to run (tk arrives in phase 7)",
+        help="which interface to run",
     )
     parser.add_argument(
         "--keyfile",
@@ -86,10 +86,6 @@ def main(argv: list[str] | None = None) -> int:
         datefmt="%H:%M:%S",
     )
 
-    if args.view == "tk":
-        print("The Tkinter view arrives in phase 7. Use --view console for now.")
-        return 1
-
     print(f"Semaphore -- client {__version__}")
     username = args.user or input("username: ").strip()
     password = args.password or getpass.getpass("password: ")
@@ -110,7 +106,15 @@ def main(argv: list[str] | None = None) -> int:
         server_hostname="localhost" if args.tls else None,
     )
     controller = ChatController(connection, model, keyring=keyring)
-    view = ConsoleView(controller)
+
+    # The only line that differs between the two interfaces. Everything
+    # below this point is identical, which is the MVC claim made concrete.
+    if args.view == "tk":
+        from im.client.view.tk import TkView
+
+        view = TkView(controller)
+    else:
+        view = ConsoleView(controller)
 
     # The connection calls these on its reader thread; both only enqueue, so
     # the model is still only ever touched by the view's own loop.
@@ -142,7 +146,8 @@ def main(argv: list[str] | None = None) -> int:
         controller.on_frame(reply)
         controller.on_state(str(connection.state))
 
-        view.read_stdin_forever()
+        if isinstance(view, ConsoleView):
+            view.read_stdin_forever()
         view.run()
     finally:
         connection.close()
