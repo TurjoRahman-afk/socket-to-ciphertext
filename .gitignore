@@ -35,3 +35,5 @@ keys/
 Thumbs.db
 desktop.ini
 im.db
+*.crt
+keys/
