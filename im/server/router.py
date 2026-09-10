@@ -15,6 +15,7 @@ import logging
 
 from im.common.frames import Frame, MessageType, error
 from im.server.registries import RoomRegistry, Session, SessionRegistry
+from im.server.store.messages import MessageStore, direct_conversation
 from im.server.store.users import SqliteUsers
 
 log = logging.getLogger(__name__)
@@ -33,6 +34,7 @@ class MessageRouter:
         sessions: SessionRegistry,  # who is online right now
         rooms: RoomRegistry,  # who is in which room
         users: SqliteUsers,  # who has an account
+        messages: MessageStore | None = None,  # history and offline queue
     ) -> None:
         # live connections. Is Alice online right now ? and how do i reach her ?
         self.sessions = sessions
@@ -40,6 +42,8 @@ class MessageRouter:
         self.rooms = rooms
         # accounts, survives disconnects. "Does alice exists and is this her password"
         self.users = users
+        # history, and what is owed to people who are not here
+        self.messages = messages
 
     # ------------------------------------------------------------ inbound ---
 
@@ -70,6 +74,8 @@ class MessageRouter:
             self._leave(session, frame)
         elif frame.type is MessageType.TYPING:
             self._typing(session, frame)
+        elif frame.type is MessageType.HISTORY:
+            self._history(session, frame)
         else:
             session.send(error("UNSUPPORTED", f"{frame.type} arrives in a later phase"))
 
@@ -149,6 +155,10 @@ class MessageRouter:
             )
         )
         self._announce(username, ONLINE)
+
+        # After LOGIN_OK, so the client already knows who it is and has its
+        # roster before messages start arriving.
+        self._flush_pending(session, username)
 
     # --------------------------------------------------------------- rooms ---
 
@@ -258,13 +268,24 @@ class MessageRouter:
             session.send(Frame(type=MessageType.ACK, data={"ref": frame.id}))
 
     def _to_user(self, session: Session, target: str, outgoing: Frame) -> bool:
+        sender = session.username or ""
+        conversation = direct_conversation(sender, target)
+        self._record(outgoing, conversation, target)
+
         recipient = self.sessions.get(target)
-        if recipient is None:
-            # Queuing for an offline user is phase 5. Until then, say so
-            # plainly rather than accepting a message that goes nowhere.
+        if recipient is not None:
+            recipient.send(outgoing)
+            return True
+
+        # Nobody home. With a store the message waits for them; without one
+        # there is nowhere to put it, so the sender is told rather than left
+        # believing it arrived.
+        if self.messages is None or not self.users.exists(target):
             session.send(error("USER_OFFLINE", f"{target} is not online"))
             return False
-        recipient.send(outgoing)
+
+        self.messages.queue_for(target, outgoing.id)
+        log.info("queued a message for %s, who is offline", target)
         return True
 
     def _to_room(self, session: Session, room: str, outgoing: Frame) -> bool:
@@ -279,13 +300,108 @@ class MessageRouter:
             session.send(error("NOT_A_MEMBER", f"join {room} before sending to it"))
             return False
 
+        self._record(outgoing, room, room)
+
         for name in sorted(members):
             if name == session.username:
                 continue  # The sender already has their own message.
             member = self.sessions.get(name)
             if member is not None:
                 member.send(outgoing)
+            elif self.messages is not None:
+                # Stored once above; this only notes who still owes a
+                # delivery, so a room of five costs one row per absentee
+                # rather than five copies of the message.
+                self.messages.queue_for(name, outgoing.id)
         return True
+
+    def _record(self, outgoing: Frame, conversation: str, recipient: str) -> None:
+        if self.messages is None:
+            return
+        self.messages.record(
+            message_id=outgoing.id,
+            conversation=conversation,
+            sender=outgoing.sender or "",
+            recipient=recipient,
+            body=outgoing.body,
+            nonce=outgoing.nonce,
+            ts=outgoing.ts,
+        )
+
+    # ------------------------------------------------------------- history ---
+
+    def _history(self, session: Session, frame: Frame) -> None:
+        """Answer a request for scrollback.
+
+        The client names the conversation the way it sees it -- a username or
+        a room -- and the server turns that into the stored key.
+        """
+        if self.messages is None:
+            session.send(error("UNSUPPORTED", "this server keeps no history"))
+            return
+
+        target = frame.data.get("room") or frame.to
+        if not target:
+            session.send(error("NO_RECIPIENT", "HISTORY needs a conversation"))
+            return
+
+        target = str(target)
+        if target.startswith(ROOM_PREFIX):
+            if session.username not in self.rooms.members(target):
+                session.send(error("NOT_A_MEMBER", f"join {target} to read its history"))
+                return
+            conversation = target
+        else:
+            conversation = direct_conversation(session.username or "", target)
+
+        before = frame.data.get("before")
+        limit = frame.data.get("limit")
+        rows = self.messages.history(
+            conversation,
+            before=int(before) if before else None,
+            limit=int(limit) if limit else 50,
+        )
+
+        session.send(
+            Frame(
+                type=MessageType.HISTORY_RESULT,
+                to=target,
+                data={
+                    "room": target,
+                    "messages": [
+                        {
+                            "id": row["id"],
+                            "from": row["sender"],
+                            # The real recipient, not the requester's view of
+                            # the conversation -- the client already has that
+                            # from the "room" field beside this list.
+                            "to": row["recipient"],
+                            "body": row["body"],
+                            "n": row["nonce"],
+                            "ts": row["ts"],
+                        }
+                        for row in rows
+                    ],
+                },
+            )
+        )
+
+    def _flush_pending(self, session: Session, username: str) -> None:
+        """Hand over everything that arrived while this user was away."""
+        if self.messages is None:
+            return
+        for row in self.messages.flush(username):
+            session.send(
+                Frame(
+                    type=MessageType.MSG,
+                    sender=row["sender"],
+                    to=row["recipient"],
+                    body=row["body"],
+                    nonce=row["nonce"],
+                    id=row["id"],
+                    ts=row["ts"],
+                )
+            )
 
     # -------------------------------------------------------------- typing ---
 

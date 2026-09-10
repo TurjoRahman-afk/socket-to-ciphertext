@@ -15,6 +15,7 @@ from im.server.handler import ClientHandler
 from im.server.registries import RoomRegistry, SessionRegistry
 from im.server.router import MessageRouter
 from im.server.store.db import MEMORY, Database
+from im.server.store.messages import MessageStore
 from im.server.store.users import SqliteUsers
 
 log = logging.getLogger(__name__)
@@ -31,16 +32,15 @@ class ChatServer:  # this represents the whole server
     """
 
     # by default the server will listen on 127.0.0.1:5000
-    def __init__(
-        self, host: str = "127.0.0.1", port: int = 5000, db_path: str = MEMORY
-    ) -> None:
+    def __init__(self, host: str = "127.0.0.1", port: int = 5000, db_path: str = MEMORY) -> None:
         self.host = host
         self.port = port
         self.db = Database(db_path)
         self.sessions = SessionRegistry()
         self.rooms = RoomRegistry()
         self.users = SqliteUsers(self.db)
-        self.router = MessageRouter(self.sessions, self.rooms, self.users)
+        self.messages = MessageStore(self.db)
+        self.router = MessageRouter(self.sessions, self.rooms, self.users, self.messages)
 
         # the listener is none but after bind() it is tcp listening socket
         self._listener: socket.socket | None = None

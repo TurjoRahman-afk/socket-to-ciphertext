@@ -12,6 +12,7 @@ from im.common.frames import Frame, MessageType
 from im.server.registries import RoomRegistry, SessionRegistry
 from im.server.router import MessageRouter
 from im.server.store.db import Database
+from im.server.store.messages import MessageStore
 from im.server.store.users import SqliteUsers
 
 HASH = "sha256-of-hunter2"
@@ -470,3 +471,129 @@ def test_login_ok_lists_the_rooms_you_are_in(router: MessageRouter) -> None:
 
     login_ok = next(f for f in fresh.outbox if f.type is MessageType.LOGIN_OK)
     assert login_ok.data["rooms"] == []  # bob is in none of them yet
+
+
+# ----------------------------------------------------- history and offline ---
+
+
+@pytest.fixture
+def stored() -> MessageRouter:
+    """A router that keeps history, unlike the fixture above."""
+    database = Database()
+    return MessageRouter(
+        SessionRegistry(),
+        RoomRegistry(),
+        SqliteUsers(database, scrypt_n=2),
+        MessageStore(database),
+    )
+
+
+def history(router: MessageRouter, session: FakeSession, room: str, **extra) -> None:
+    router.handle(session, Frame(type=MessageType.HISTORY, data={"room": room, **extra}))
+
+
+def test_a_message_to_someone_offline_is_queued_not_refused(stored: MessageRouter) -> None:
+    alice = online(stored, "alice")
+    sign_up(stored, FakeSession(), "bob")  # bob has an account but is not here
+    quiet(alice)
+
+    stored.handle(alice, Frame(type=MessageType.MSG, to="bob", body="catch you later"))
+
+    assert alice.types == [MessageType.ACK], "the sender is told it was accepted"
+    assert stored.messages.pending_count("bob") == 1
+
+
+def test_a_message_to_a_name_with_no_account_is_still_refused(stored: MessageRouter) -> None:
+    """Queuing for a name nobody owns would fill the table with rubbish."""
+    alice = online(stored, "alice")
+    quiet(alice)
+
+    stored.handle(alice, Frame(type=MessageType.MSG, to="nobody", body="hello?"))
+
+    assert alice.last().data["code"] == "USER_OFFLINE"
+
+
+def test_queued_messages_arrive_at_the_next_login(stored: MessageRouter) -> None:
+    """The phase 5 exit criteria: sent while away, delivered on return."""
+    alice = online(stored, "alice")
+    sign_up(stored, FakeSession(), "bob")
+    stored.handle(alice, Frame(type=MessageType.MSG, to="bob", body="one"))
+    stored.handle(alice, Frame(type=MessageType.MSG, to="bob", body="two"))
+
+    bob = FakeSession()
+    log_in(stored, bob, "bob")
+
+    delivered = [f for f in bob.outbox if f.type is MessageType.MSG]
+    assert [f.body for f in delivered] == ["one", "two"]
+    assert stored.messages.pending_count("bob") == 0
+
+
+def test_queued_messages_arrive_after_login_ok(stored: MessageRouter) -> None:
+    """A client needs to know who it is before messages start landing."""
+    alice = online(stored, "alice")
+    sign_up(stored, FakeSession(), "bob")
+    stored.handle(alice, Frame(type=MessageType.MSG, to="bob", body="one"))
+
+    bob = FakeSession()
+    log_in(stored, bob, "bob")
+
+    kinds = [f.type for f in bob.outbox]
+    assert kinds.index(MessageType.LOGIN_OK) < kinds.index(MessageType.MSG)
+
+
+def test_a_room_message_is_queued_for_absent_members(stored: MessageRouter) -> None:
+    alice = online(stored, "alice")
+    sign_up(stored, FakeSession(), "bob")
+    stored.rooms.join("#general", "alice")
+    stored.rooms.join("#general", "bob")
+
+    stored.handle(alice, Frame(type=MessageType.MSG, to="#general", body="anyone about"))
+
+    assert len(stored.messages) == 1, "stored once, not copied per member"
+    assert stored.messages.pending_count("bob") == 1
+
+
+def test_history_returns_what_was_said(stored: MessageRouter) -> None:
+    alice = online(stored, "alice")
+    bob = online(stored, "bob")
+    stored.handle(alice, Frame(type=MessageType.MSG, to="bob", body="first"))
+    stored.handle(bob, Frame(type=MessageType.MSG, to="alice", body="second"))
+    quiet(alice)
+
+    history(stored, alice, "bob")
+
+    result = alice.last()
+    assert result.type is MessageType.HISTORY_RESULT
+    assert [m["body"] for m in result.data["messages"]] == ["first", "second"]
+    assert [m["from"] for m in result.data["messages"]] == ["alice", "bob"]
+
+
+def test_history_is_the_same_conversation_from_either_side(stored: MessageRouter) -> None:
+    alice = online(stored, "alice")
+    bob = online(stored, "bob")
+    stored.handle(alice, Frame(type=MessageType.MSG, to="bob", body="hello"))
+    quiet(alice, bob)
+
+    history(stored, alice, "bob")
+    history(stored, bob, "alice")
+
+    assert alice.last().data["messages"] == bob.last().data["messages"]
+
+
+def test_room_history_needs_membership(stored: MessageRouter) -> None:
+    alice = online(stored, "alice")
+    stored.rooms.join("#general", "alice")
+    stored.handle(alice, Frame(type=MessageType.MSG, to="#general", body="private"))
+    bob = online(stored, "bob")
+    quiet(bob)
+
+    history(stored, bob, "#general")
+
+    assert bob.last().data["code"] == "NOT_A_MEMBER"
+
+
+def test_a_server_with_no_store_says_so(router: MessageRouter) -> None:
+    alice = online(router, "alice")
+    quiet(alice)
+    history(router, alice, "bob")
+    assert alice.last().data["code"] == "UNSUPPORTED"

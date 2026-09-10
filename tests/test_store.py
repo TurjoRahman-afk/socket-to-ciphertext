@@ -12,6 +12,7 @@ from pathlib import Path
 import pytest
 
 from im.server.store.db import Database
+from im.server.store.messages import MessageStore, direct_conversation
 from im.server.store.users import SqliteUsers
 
 HASH = "sha256-of-hunter2"
@@ -53,9 +54,7 @@ def test_a_failed_write_rolls_back() -> None:
     db = Database()
     with pytest.raises(ValueError):
         with db.write() as conn:
-            conn.execute(
-                "INSERT INTO rooms (room, created_at) VALUES (?, ?)", ("#general", 0)
-            )
+            conn.execute("INSERT INTO rooms (room, created_at) VALUES (?, ?)", ("#general", 0))
             raise ValueError("something went wrong halfway through")
 
     with db.read() as conn:
@@ -162,3 +161,139 @@ def test_a_public_key_can_be_stored_and_read_back(users: SqliteUsers) -> None:
 def test_a_public_key_may_be_given_at_registration(users: SqliteUsers) -> None:
     users.register("alice", HASH, pubkey="BASE64-KEY")
     assert users.pubkey("alice") == "BASE64-KEY"
+
+
+# ------------------------------------------------------------- messages ---
+
+
+@pytest.fixture
+def store() -> MessageStore:
+    return MessageStore(Database())
+
+
+def add(store: MessageStore, mid: str, conversation: str, sender: str, ts: int) -> None:
+    store.record(
+        message_id=mid,
+        conversation=conversation,
+        sender=sender,
+        recipient="bob",
+        body=f"message {mid}",
+        nonce=None,
+        ts=ts,
+    )
+
+
+def test_a_direct_conversation_key_is_the_same_from_either_side() -> None:
+    """Otherwise alice-to-bob and bob-to-alice would be two half conversations."""
+    assert direct_conversation("alice", "bob") == direct_conversation("bob", "alice")
+    assert direct_conversation("alice", "bob") != direct_conversation("alice", "carol")
+
+
+def test_recording_the_same_id_twice_is_not_an_error(store: MessageStore) -> None:
+    """A repeat means the client resent after a reconnect, not that something
+    is wrong."""
+    add(store, "m1", "c", "alice", 100)
+    add(store, "m1", "c", "alice", 100)
+    assert len(store) == 1
+
+
+def test_history_comes_back_oldest_first(store: MessageStore) -> None:
+    for i, ts in enumerate([300, 100, 200]):
+        add(store, f"m{i}", "c", "alice", ts)
+
+    assert [row["ts"] for row in store.history("c")] == [100, 200, 300]
+
+
+def test_history_returns_the_newest_when_there_are_more_than_the_limit(
+    store: MessageStore,
+) -> None:
+    for i in range(10):
+        add(store, f"m{i}", "c", "alice", i)
+
+    rows = store.history("c", limit=3)
+
+    assert [row["ts"] for row in rows] == [7, 8, 9]
+
+
+def test_history_pages_backwards_with_before(store: MessageStore) -> None:
+    for i in range(10):
+        add(store, f"m{i}", "c", "alice", i)
+
+    rows = store.history("c", before=5, limit=3)
+
+    assert [row["ts"] for row in rows] == [2, 3, 4]
+
+
+def test_history_of_an_empty_conversation_is_empty(store: MessageStore) -> None:
+    assert store.history("nothing here") == []
+
+
+def test_the_limit_is_capped(store: MessageStore) -> None:
+    """A client asking for a million rows must not be able to have them."""
+    for i in range(5):
+        add(store, f"m{i}", "c", "alice", i)
+    assert len(store.history("c", limit=10_000)) == 5
+
+
+# -------------------------------------------------------------- pending ---
+
+
+def test_a_queued_message_is_handed_over_on_flush(store: MessageStore) -> None:
+    add(store, "m1", "c", "alice", 100)
+    store.queue_for("bob", "m1")
+
+    delivered = store.flush("bob")
+
+    assert [row["id"] for row in delivered] == ["m1"]
+    assert store.pending_count("bob") == 0
+
+
+def test_flushing_twice_delivers_nothing_the_second_time(store: MessageStore) -> None:
+    add(store, "m1", "c", "alice", 100)
+    store.queue_for("bob", "m1")
+
+    store.flush("bob")
+
+    assert store.flush("bob") == []
+
+
+def test_pending_messages_come_back_oldest_first(store: MessageStore) -> None:
+    for i, ts in enumerate([300, 100, 200]):
+        add(store, f"m{i}", "c", "alice", ts)
+        store.queue_for("bob", f"m{i}")
+
+    assert [row["ts"] for row in store.flush("bob")] == [100, 200, 300]
+
+
+def test_one_message_can_be_owed_to_several_people(store: MessageStore) -> None:
+    """A room message to five people, three offline, is stored once and
+    queued three times rather than copied."""
+    add(store, "m1", "#general", "alice", 100)
+    for name in ("bob", "carol", "dave"):
+        store.queue_for(name, "m1")
+
+    assert len(store) == 1
+    assert [row["id"] for row in store.flush("carol")] == ["m1"]
+    assert store.pending_count("bob") == 1, "carol's flush must not clear bob's"
+
+
+def test_a_queued_message_survives_a_restart(tmp_path: Path) -> None:
+    """The phase 5 exit criteria, at the store level."""
+    path = tmp_path / "im.db"
+    first = MessageStore(Database(path))
+    first.record(
+        message_id="m1",
+        conversation=direct_conversation("alice", "bob"),
+        sender="alice",
+        recipient="bob",
+        body="sent while you were out",
+        nonce=None,
+        ts=100,
+    )
+    first.queue_for("bob", "m1")
+    first.db.close()
+
+    second = MessageStore(Database(path))
+    delivered = second.flush("bob")
+
+    assert [row["body"] for row in delivered] == ["sent while you were out"]

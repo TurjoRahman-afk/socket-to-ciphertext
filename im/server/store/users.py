@@ -65,9 +65,7 @@ class SqliteUsers:
         digest = self._derive(pass_hash, salt)
 
         with self.db.write() as conn:
-            taken = conn.execute(
-                "SELECT 1 FROM users WHERE username = ?", (username,)
-            ).fetchone()
+            taken = conn.execute("SELECT 1 FROM users WHERE username = ?", (username,)).fetchone()
             if taken is not None:
                 return False
             conn.execute(
@@ -98,9 +96,7 @@ class SqliteUsers:
     def exists(self, username: str) -> bool:
         with self.db.read() as conn:
             return (
-                conn.execute(
-                    "SELECT 1 FROM users WHERE username = ?", (username,)
-                ).fetchone()
+                conn.execute("SELECT 1 FROM users WHERE username = ?", (username,)).fetchone()
                 is not None
             )
 
