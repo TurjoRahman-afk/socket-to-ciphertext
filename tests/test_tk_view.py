@@ -25,15 +25,32 @@ from im.common.frames import Frame, MessageType
 tk = pytest.importorskip("tkinter")
 
 
+@pytest.fixture(scope="session")
+def tk_root():
+    """One hidden Tk root for the whole session.
+
+    Creating and destroying a Tk root repeatedly in one process eventually
+    corrupts the Tcl interpreter -- it starts failing with "invalid command
+    name tcl_findLibrary" partway through a run, while every test passes on
+    its own. One root, and a Toplevel per test, avoids it entirely.
+    """
+    try:
+        root = tk.Tk()
+    except tk.TclError:  # pragma: no cover -- headless machine
+        pytest.skip("no display available")
+    root.withdraw()
+    try:
+        yield root
+    finally:
+        root.destroy()
+
+
 @pytest.fixture
-def view():
+def view(tk_root):
     """A real window, torn down afterwards."""
     from im.client.view.tk import TkView
 
-    try:
-        tk.Tk().destroy()
-    except tk.TclError:  # pragma: no cover -- headless machine
-        pytest.skip("no display available")
+    window = tk.Toplevel(tk_root)
 
     class FakeConnection:
         def __init__(self) -> None:
@@ -57,13 +74,16 @@ def view():
     connection = FakeConnection()
     model = ChatModel()
     model.set_identity("alice")
-    instance = TkView(ChatController(connection, model))
+    instance = TkView(ChatController(connection, model), root=window)
     instance.connection = connection
     try:
         yield instance
     finally:
         try:
-            instance.root.destroy()
+            # Let Tk finish anything already scheduled before tearing the
+            # window down, or the destroy can race a pending after() call.
+            window.update_idletasks()
+            window.destroy()
         except tk.TclError:
             pass
 

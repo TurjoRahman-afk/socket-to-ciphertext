@@ -70,7 +70,7 @@ ORANGE = "#E2801E"
 class TkView:
     """The window. Renders the model and turns clicks into gestures."""
 
-    def __init__(self, controller: ChatController) -> None:
+    def __init__(self, controller: ChatController, root: tk.Misc | None = None) -> None:
         self.controller = controller
         self.model = controller.model
 
@@ -78,7 +78,10 @@ class TkView:
         self._typing_after: str | None = None
         self._announced_typing = False
 
-        self.root = tk.Tk()
+        # A caller may supply the window. The tests do, because creating
+        # and destroying a Tk root repeatedly in one process eventually
+        # corrupts the Tcl interpreter.
+        self.root = root if root is not None else tk.Tk()
         self.root.title("Semaphore")
         self.root.geometry("940x600")
         self.root.minsize(720, 420)
