@@ -85,17 +85,14 @@ class MessageRouter:
         if username is None:
             return  # Never logged in, so nobody was ever told they arrived.
 
-        # Read the membership before forgetting it, or there is nobody left to
-        # tell that this person has gone.
-        rooms = self.rooms.rooms_of(username)
-
         self.sessions.logout(username)
-        self.rooms.forget(username)
         session.username = None
 
+        # Membership is deliberately NOT dropped. You are in a room until you
+        # LEAVE it, connected or not -- which is what makes LOGIN_OK's room
+        # list meaningful and lets a room message wait for an absent member.
+        # PRESENCE already tells the room that this person has gone offline.
         self._announce(username, OFFLINE)
-        for room in rooms:
-            self._broadcast_room_state(room)
 
     # ------------------------------------------------------------ accounts ---
 

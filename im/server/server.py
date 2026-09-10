@@ -12,10 +12,11 @@ import socket
 import threading
 
 from im.server.handler import ClientHandler
-from im.server.registries import RoomRegistry, SessionRegistry
+from im.server.registries import SessionRegistry
 from im.server.router import MessageRouter
 from im.server.store.db import MEMORY, Database
 from im.server.store.messages import MessageStore
+from im.server.store.rooms import SqliteRooms
 from im.server.store.users import SqliteUsers
 
 log = logging.getLogger(__name__)
@@ -37,7 +38,7 @@ class ChatServer:  # this represents the whole server
         self.port = port
         self.db = Database(db_path)
         self.sessions = SessionRegistry()
-        self.rooms = RoomRegistry()
+        self.rooms = SqliteRooms(self.db)
         self.users = SqliteUsers(self.db)
         self.messages = MessageStore(self.db)
         self.router = MessageRouter(self.sessions, self.rooms, self.users, self.messages)

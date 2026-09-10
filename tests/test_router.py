@@ -323,13 +323,20 @@ def test_disconnecting_before_login_announces_nothing(router: MessageRouter) -> 
     assert alice.outbox == []
 
 
-def test_disconnecting_removes_you_from_your_rooms(router: MessageRouter) -> None:
+def test_membership_outlives_the_connection(router: MessageRouter) -> None:
+    """Otherwise LOGIN_OK could never carry a room list, and a room message
+    could never wait for a member who happens to be away."""
     bob = online(router, "bob")
     router.rooms.join("#general", "bob")
 
     router.on_disconnect(bob)
 
-    assert router.rooms.members("#general") == set()
+    assert router.rooms.members("#general") == {"bob"}
+
+    again = FakeSession()
+    log_in(router, again, "bob")
+    login_ok = next(f for f in again.outbox if f.type is MessageType.LOGIN_OK)
+    assert login_ok.data["rooms"] == ["#general"]
 
 
 def test_a_name_is_free_again_after_disconnecting(router: MessageRouter) -> None:
@@ -446,7 +453,9 @@ def test_you_must_join_a_room_before_sending_to_it(router: MessageRouter) -> Non
     assert bob.last().data["code"] == "NOT_A_MEMBER"
 
 
-def test_disconnecting_tells_your_rooms_you_have_gone(router: MessageRouter) -> None:
+def test_disconnecting_announces_presence_not_a_room_change(router: MessageRouter) -> None:
+    """Going offline is not leaving. The room still lists them, and PRESENCE
+    is what tells everybody they are not reachable."""
     alice = online(router, "alice")
     bob = online(router, "bob")
     create(router, alice, "#general")
@@ -455,8 +464,9 @@ def test_disconnecting_tells_your_rooms_you_have_gone(router: MessageRouter) -> 
 
     router.on_disconnect(bob)
 
-    room_states = [f for f in alice.outbox if f.type is MessageType.ROOM_STATE]
-    assert room_states[-1].data["members"] == ["alice"]
+    assert alice.last().type is MessageType.PRESENCE
+    assert alice.last().data == {"user": "bob", "state": "OFFLINE"}
+    assert not [f for f in alice.outbox if f.type is MessageType.ROOM_STATE]
 
 
 def test_login_ok_lists_the_rooms_you_are_in(router: MessageRouter) -> None:

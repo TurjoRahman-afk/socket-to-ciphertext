@@ -13,6 +13,7 @@ import pytest
 
 from im.server.store.db import Database
 from im.server.store.messages import MessageStore, direct_conversation
+from im.server.store.rooms import SqliteRooms
 from im.server.store.users import SqliteUsers
 
 HASH = "sha256-of-hunter2"
@@ -297,3 +298,54 @@ def test_a_queued_message_survives_a_restart(tmp_path: Path) -> None:
     delivered = second.flush("bob")
 
     assert [row["body"] for row in delivered] == ["sent while you were out"]
+
+
+# ----------------------------------------------------------------- rooms ---
+
+
+@pytest.fixture
+def rooms() -> SqliteRooms:
+    return SqliteRooms(Database())
+
+
+def test_creating_a_room_twice_is_refused(rooms: SqliteRooms) -> None:
+    assert rooms.create("#general")
+    assert not rooms.create("#general")
+
+
+def test_joining_twice_is_harmless(rooms: SqliteRooms) -> None:
+    """A repeat is not an error -- it is a client resending after a reconnect."""
+    rooms.join("#general", "alice")
+    rooms.join("#general", "alice")
+    assert rooms.members("#general") == {"alice"}
+
+
+def test_leaving_removes_only_that_member(rooms: SqliteRooms) -> None:
+    rooms.join("#general", "alice")
+    rooms.join("#general", "bob")
+
+    rooms.leave("#general", "alice")
+
+    assert rooms.members("#general") == {"bob"}
+
+
+def test_rooms_of_lists_them_sorted(rooms: SqliteRooms) -> None:
+    for room in ("#zulu", "#alpha"):
+        rooms.join(room, "alice")
+    rooms.join("#other", "bob")
+
+    assert rooms.rooms_of("alice") == ["#alpha", "#zulu"]
+
+
+def test_membership_survives_a_restart(tmp_path: Path) -> None:
+    path = tmp_path / "im.db"
+    first = SqliteRooms(Database(path))
+    first.create("#general")
+    first.join("#general", "alice")
+    first.db.close()
+
+    second = SqliteRooms(Database(path))
+
+    assert second.exists("#general")
+    assert second.members("#general") == {"alice"}
+    assert second.rooms_of("alice") == ["#general"]

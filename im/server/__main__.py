@@ -27,6 +27,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="interface to bind (use 0.0.0.0 to accept connections from other machines)",
     )
     parser.add_argument("--port", type=int, default=DEFAULT_PORT, help="port to listen on")
+    parser.add_argument(
+        "--db",
+        default="im.db",
+        help="database file; pass :memory: for a server that forgets everything on exit",
+    )
     parser.add_argument("--quiet", action="store_true", help="log warnings and errors only")
     return parser.parse_args(argv)
 
@@ -39,11 +44,12 @@ def main(argv: list[str] | None = None) -> int:
         datefmt="%H:%M:%S",
     )
 
-    server = ChatServer(args.host, args.port)
+    server = ChatServer(args.host, args.port, db_path=args.db)
     host, port = server.bind()
     print(f"Socket to Ciphertext -- server {__version__}")
     print(f"  listen   {host}:{port}")
-    print("  phase    2 (routing: LOGIN, MSG, PRESENCE)")
+    print(f"  store    {args.db}")
+    print("  phase    5 (accounts, rooms and history survive a restart)")
     print(f"  try      telnet {host} {port}")
     print("  stop     Ctrl-C")
 
