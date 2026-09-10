@@ -63,6 +63,14 @@ class ChatController:
         if self.model.active is not None:
             self.connection.typing(self.model.active, on)
 
+    def request_history(self, key: str | None = None, limit: int = 50) -> bool:
+        """Ask the server for scrollback on a conversation."""
+        target = key or self.model.active
+        if target is None:
+            return False
+        self.connection.history(target, limit=limit)
+        return True
+
     def create_room(self, room: str) -> None:
         self.connection.create_room(room)
 
@@ -87,6 +95,8 @@ class ChatController:
             self._presence(frame)
         elif frame.type is MessageType.TYPING:
             self._typing(frame)
+        elif frame.type is MessageType.HISTORY_RESULT:
+            self._history_result(frame)
         elif frame.type is MessageType.ROOM_STATE:
             self._room_state(frame)
         elif frame.type is MessageType.LOGIN_OK:
@@ -143,6 +153,31 @@ class ChatController:
             return
         key = target if target.startswith(ROOM_PREFIX) else sender
         self.model.set_typing(key, sender, bool(frame.data.get("on")))
+
+    def _history_result(self, frame: Frame) -> None:
+        """Turn stored rows back into messages a view can draw.
+
+        `mine` is recomputed from who we are rather than stored, because the
+        server has no idea which client is asking.
+        """
+        key = frame.data.get("room") or frame.to
+        if not key:
+            return
+
+        me = self.model.username
+        self.model.load_history(
+            str(key),
+            [
+                Message(
+                    id=str(row.get("id", "")),
+                    sender=str(row.get("from", "?")),
+                    body=str(row.get("body") or ""),
+                    ts=int(row.get("ts") or now_ms()),
+                    mine=row.get("from") == me,
+                )
+                for row in frame.data.get("messages") or []
+            ],
+        )
 
     def _room_state(self, frame: Frame) -> None:
         room = frame.data.get("room") or frame.to

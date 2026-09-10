@@ -51,9 +51,12 @@ you can hold a 1:1 and a room chat side by side and see which has unread
 messages; presence when someone logs in or drops; typing indicators; and
 `/who`, `/chats`, `/history` and `/rooms`.
 
-What does **not** work yet: nothing is saved to disk, so accounts, rooms and
-history vanish when the server restarts; nothing is encrypted; and there is no
-GUI. Those are phases 5 through 7.
+**It survives a restart.** Accounts, rooms, membership and message history
+live in sqlite. Kill the server, start it again, log back in: anything sent
+while you were away is delivered, and `/history` fetches the scrollback.
+
+What does **not** work yet: nothing is encrypted, and there is no GUI. Those
+are phases 6 and 7.
 
 | Phase | What it adds | State |
 |-------|--------------|-------|
@@ -62,8 +65,8 @@ GUI. Those are phases 5 through 7.
 | 2 | Server core: registries, router, presence | **done** |
 | 3 | Headless client: connection, model, console view | **done** |
 | 4 | Rooms and concurrent conversations | **done** |
-| 5 | Persistence, accounts, offline delivery | next |
-| 6 | TLS and end-to-end encryption | |
+| 5 | Persistence, accounts, offline delivery | **done** |
+| 6 | TLS and end-to-end encryption | next |
 | 7 | Tkinter interface (design pass first) | |
 | 8 | Internet demo, hardening, report | |
 
@@ -97,6 +100,7 @@ pip install -r requirements.txt
 python -m im.server                      # the hub, on 127.0.0.1:5000
 python -m im.server --host 0.0.0.0       # reachable from other machines
 python -m im.server --port 5050 --quiet
+python -m im.server --db im.db            # where accounts and history live
 python -m im.client --user alice --password pw --register
 python -m im.client --host 192.168.1.20 --user bob --password pw
 ```

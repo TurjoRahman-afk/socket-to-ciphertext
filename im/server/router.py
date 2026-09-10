@@ -265,24 +265,22 @@ class MessageRouter:
             session.send(Frame(type=MessageType.ACK, data={"ref": frame.id}))
 
     def _to_user(self, session: Session, target: str, outgoing: Frame) -> bool:
-        sender = session.username or ""
-        conversation = direct_conversation(sender, target)
-        self._record(outgoing, conversation, target)
-
         recipient = self.sessions.get(target)
-        if recipient is not None:
-            recipient.send(outgoing)
-            return True
 
-        # Nobody home. With a store the message waits for them; without one
-        # there is nowhere to put it, so the sender is told rather than left
-        # believing it arrived.
-        if self.messages is None or not self.users.exists(target):
+        # Refused before anything is written. A message to a name nobody owns
+        # -- a typo, usually -- should not end up in the database at all.
+        if recipient is None and (self.messages is None or not self.users.exists(target)):
             session.send(error("USER_OFFLINE", f"{target} is not online"))
             return False
 
-        self.messages.queue_for(target, outgoing.id)
-        log.info("queued a message for %s, who is offline", target)
+        sender = session.username or ""
+        self._record(outgoing, direct_conversation(sender, target), target)
+
+        if recipient is not None:
+            recipient.send(outgoing)
+        else:
+            self.messages.queue_for(target, outgoing.id)
+            log.info("queued a message for %s, who is offline", target)
         return True
 
     def _to_room(self, session: Session, room: str, outgoing: Frame) -> bool:

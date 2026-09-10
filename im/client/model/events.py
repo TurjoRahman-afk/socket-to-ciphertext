@@ -48,6 +48,14 @@ class UnreadChanged:
 
 
 @dataclass(frozen=True, slots=True)
+class HistoryLoaded:
+    """Scrollback arrived from the server and replaced what was held."""
+
+    conversation: str
+    count: int
+
+
+@dataclass(frozen=True, slots=True)
 class TypingChanged:
     """Who is currently typing in a conversation. A hint, never stored."""
 
@@ -95,6 +103,7 @@ Event = (
     | MessageAdded
     | UnreadChanged
     | TypingChanged
+    | HistoryLoaded
     | RoomMembersChanged
     | ConversationSelected
     | ConnectionStateChanged

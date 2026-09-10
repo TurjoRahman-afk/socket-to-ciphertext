@@ -30,6 +30,7 @@ from im.client.model.events import (
     ConversationSelected,
     ErrorRaised,
     Event,
+    HistoryLoaded,
     MessageAdded,
     PresenceChanged,
     RoomMembersChanged,
@@ -41,7 +42,7 @@ from im.common.frames import Frame
 HELP = """
   /to <user|#room>   talk to someone, e.g. /to bob
   /who               who is online
-  /history           replay the conversation on screen
+  /history           fetch this conversation's scrollback from the server
   /chats             conversations, with unread counts
 
   /create #room      make a room and join it
@@ -210,6 +211,10 @@ class ConsoleView:
                     f"\n  [{event.conversation}] {event.message.sender}: "
                     f"{event.message.body}   ({unread} unread)"
                 )
+        elif isinstance(event, HistoryLoaded):
+            print(f"\n  -- {event.count} message(s) in {event.conversation} --")
+            for message in self.model.conversation(event.conversation).messages:
+                print(f"  {self._line(message)}")
         elif isinstance(event, TypingChanged):
             if event.users and event.conversation == self.model.active:
                 who = ", ".join(event.users)
@@ -235,14 +240,13 @@ class ConsoleView:
         return f"{who}: {message.body}"
 
     def _history(self) -> None:
-        if self.model.active is None:
-            print("  ! nobody selected")
-            return
-        conversation = self.model.conversation(self.model.active)
-        if not conversation.messages:
-            print("  (nothing yet)")
-        for message in conversation.messages:
-            print(f"  {self._line(message)}")
+        """Ask the server rather than replaying what is in memory.
+
+        The answer arrives as a frame like any other and is printed when
+        HistoryLoaded reaches _render, so this returns immediately.
+        """
+        if not self.controller.request_history():
+            print("  ! nobody selected -- try /to bob")
 
     def _chats(self) -> None:
         keys = self.model.keys()

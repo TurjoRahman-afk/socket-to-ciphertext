@@ -27,6 +27,7 @@ from im.client.model.events import (
     ConversationSelected,
     ErrorRaised,
     Event,
+    HistoryLoaded,
     IdentityEstablished,
     MessageAdded,
     PresenceChanged,
@@ -135,6 +136,22 @@ class ChatModel:
         self._emit(MessageAdded(key, message))
         if conversation.unread != before:
             self._emit(UnreadChanged(key, conversation.unread))
+
+    def load_history(self, key: str, messages: list[Message]) -> None:
+        """Replace a conversation's messages with scrollback from the server.
+
+        Replaced rather than merged: the server has stored everything either
+        side sent, so it is the authority on what was said and in what order.
+        Merging would mean reconciling two orderings for no gain.
+
+        Unread counts are untouched. Reading history is not the same as
+        reading the messages -- the user asked to look backwards, which says
+        nothing about whether they have seen what arrived while they were
+        looking somewhere else.
+        """
+        conversation = self.conversation(key)
+        conversation.messages = list(messages)
+        self._emit(HistoryLoaded(key, len(messages)))
 
     def select(self, key: str | None) -> None:
         """Put a conversation on screen, which also marks it read."""

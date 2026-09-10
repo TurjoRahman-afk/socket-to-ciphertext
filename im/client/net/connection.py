@@ -220,6 +220,13 @@ class ServerConnection:
         the server relays it and nobody acknowledges it."""
         self.send(Frame(type=MessageType.TYPING, to=to, data={"on": bool(on)}))
 
+    def history(self, room: str, before: int | None = None, limit: int = 50) -> None:
+        """Ask for scrollback. The answer arrives as a HISTORY_RESULT frame."""
+        data: dict = {"room": room, "limit": limit}
+        if before is not None:
+            data["before"] = before
+        self.send(Frame(type=MessageType.HISTORY, to=room, data=data))
+
     def create_room(self, room: str) -> None:
         self.send(Frame(type=MessageType.CREATE_ROOM, data={"room": room}))
 
