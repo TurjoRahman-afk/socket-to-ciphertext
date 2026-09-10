@@ -10,6 +10,7 @@ import argparse
 import logging
 
 from im import __version__
+from im.crypto.tls import generate_self_signed, server_context
 from im.server.server import ChatServer
 
 DEFAULT_HOST = "127.0.0.1"
@@ -32,6 +33,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default="im.db",
         help="database file; pass :memory: for a server that forgets everything on exit",
     )
+    parser.add_argument(
+        "--tls",
+        action="store_true",
+        help="wrap connections in TLS, generating a development certificate if needed",
+    )
+    parser.add_argument("--cert", default="dev.crt", help="TLS certificate file")
+    parser.add_argument("--key", default="dev.key", help="TLS private key file")
     parser.add_argument("--quiet", action="store_true", help="log warnings and errors only")
     return parser.parse_args(argv)
 
@@ -44,12 +52,18 @@ def main(argv: list[str] | None = None) -> int:
         datefmt="%H:%M:%S",
     )
 
-    server = ChatServer(args.host, args.port, db_path=args.db)
+    context = None
+    if args.tls:
+        cert, key = generate_self_signed(args.cert, args.key)
+        context = server_context(cert, key)
+
+    server = ChatServer(args.host, args.port, db_path=args.db, tls=context)
     host, port = server.bind()
     print(f"Socket to Ciphertext -- server {__version__}")
     print(f"  listen   {host}:{port}")
     print(f"  store    {args.db}")
-    print("  phase    5 (accounts, rooms and history survive a restart)")
+    print(f"  tls      {args.cert if args.tls else 'off (plaintext)'}")
+    print("  phase    6 (TLS available, end-to-end encryption in the client)")
     print(f"  try      telnet {host} {port}")
     print("  stop     Ctrl-C")
 

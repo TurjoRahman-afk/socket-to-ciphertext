@@ -245,3 +245,33 @@ def test_a_listener_that_raises_does_not_kill_the_connection(server: ChatServer)
 
         assert alice.state is ConnectionState.ONLINE
         alice.message("bob", "two")  # still usable
+
+
+# --------------------------------------------------------------------- TLS ---
+
+
+def test_a_client_can_talk_to_a_tls_server(tmp_path) -> None:
+    """The same protocol, over an encrypted link. Nothing above the socket
+    changes -- which is the point of putting TLS at this layer."""
+    import ssl as ssl_module
+
+    from im.crypto.tls import client_context, generate_self_signed, server_context
+
+    cert, key = generate_self_signed(tmp_path / "dev.crt", tmp_path / "dev.key")
+    server = ChatServer("127.0.0.1", 0, tls=server_context(cert, key))
+    host, port = server.bind()
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    try:
+        conn = ServerConnection(host, port, tls=client_context(cert), server_hostname="localhost")
+        conn.connect()
+        try:
+            assert conn.register("alice", HASH).type is MessageType.OK
+            assert conn.login("alice", HASH).type is MessageType.LOGIN_OK
+            assert isinstance(conn._sock, ssl_module.SSLSocket)
+        finally:
+            conn.close()
+    finally:
+        server.shutdown()
+        thread.join(timeout=2)

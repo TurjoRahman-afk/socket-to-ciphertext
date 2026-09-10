@@ -22,6 +22,7 @@ from __future__ import annotations
 import logging
 import queue
 import socket
+import ssl
 import threading
 from collections.abc import Callable
 
@@ -61,10 +62,17 @@ class ServerConnection:
         port: int = 5000,
         on_frame: Callable[[Frame], None] | None = None,
         on_state: Callable[[ConnectionState], None] | None = None,
+        tls: ssl.SSLContext | None = None,
+        server_hostname: str | None = None,
     ) -> None:
         self.host = host
         self.port = port
         self.username: str | None = None
+        # None means plaintext. The hostname is what the certificate is
+        # checked against, which is not always the address dialled -- a
+        # tunnel or an IP address needs it stated separately.
+        self.tls = tls
+        self.server_hostname = server_hostname or host
 
         self._on_frame = on_frame
         self._machine = ConnectionStateMachine(on_change=on_state)
@@ -120,6 +128,16 @@ class ServerConnection:
             self._machine.transition(Event.SOCKET_FAILED)
             raise ConnectionError(f"could not reach {self.host}:{self.port}: {exc}") from exc
 
+        if self.tls is not None:
+            try:
+                sock = self.tls.wrap_socket(sock, server_hostname=self.server_hostname)
+            except (ssl.SSLError, OSError) as exc:
+                sock.close()
+                self._machine.transition(Event.SOCKET_FAILED)
+                # Worth its own message: a certificate problem looks nothing
+                # like a server being down, and confusing the two costs hours.
+                raise ConnectionError(f"TLS handshake failed: {exc}") from exc
+
         # Back to blocking mode: the connect timeout above must not become a
         # read timeout, or an idle connection would drop every few seconds.
         sock.settimeout(None)
@@ -164,11 +182,24 @@ class ServerConnection:
 
     # ----------------------------------------------------------- handshake ---
 
-    def register(self, username: str, pass_hash: str, timeout: float = REPLY_TIMEOUT) -> Frame:
-        """Create an account. Returns the OK or ERROR frame the server sent."""
+    def register(
+        self,
+        username: str,
+        pass_hash: str,
+        pubkey: str | None = None,
+        timeout: float = REPLY_TIMEOUT,
+    ) -> Frame:
+        """Create an account. Returns the OK or ERROR frame the server sent.
+
+        The public key is published here, once, so that anybody can encrypt to
+        this user from then on without a separate step.
+        """
         self._require(ConnectionState.AUTHENTICATING, "register")
+        data: dict = {"user": username, "pass_hash": pass_hash}
+        if pubkey is not None:
+            data["pubkey"] = pubkey
         return self._request(
-            Frame(type=MessageType.REGISTER, data={"user": username, "pass_hash": pass_hash}),
+            Frame(type=MessageType.REGISTER, data=data),
             expecting={MessageType.OK, MessageType.ERROR},
             timeout=timeout,
         )
@@ -219,6 +250,10 @@ class ServerConnection:
         """Tell the other end whether we are composing. A hint, not a message:
         the server relays it and nobody acknowledges it."""
         self.send(Frame(type=MessageType.TYPING, to=to, data={"on": bool(on)}))
+
+    def get_key(self, user: str) -> None:
+        """Ask for somebody's public key. The answer arrives as a KEY frame."""
+        self.send(Frame(type=MessageType.GET_KEY, data={"user": user}))
 
     def history(self, room: str, before: int | None = None, limit: int = 50) -> None:
         """Ask for scrollback. The answer arrives as a HISTORY_RESULT frame."""

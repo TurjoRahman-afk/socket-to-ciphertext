@@ -16,6 +16,7 @@ import pytest
 
 from im.crypto.envelope import DecryptionFailed, key_for, open_, seal
 from im.crypto.identity import Identity
+from im.crypto.keyring import Keyring
 from im.crypto.tls import client_context, generate_self_signed, server_context
 
 
@@ -235,3 +236,54 @@ def test_an_untrusted_certificate_is_refused(tmp_path: Path) -> None:
 
     thread.join(timeout=2)
     listener.close()
+
+
+# ---------------------------------------------------------------- keyring ---
+
+
+def test_a_keyring_publishes_its_own_public_key(alice: Identity) -> None:
+    assert Keyring(alice).public_b64 == alice.public_b64
+
+
+def test_sealing_without_the_key_returns_nothing(alice: Identity) -> None:
+    """The caller must ask for the key rather than fall back to plaintext."""
+    assert Keyring(alice).seal("bob", "hello", "alice") is None
+
+
+def test_two_keyrings_can_talk(alice: Identity, bob: Identity) -> None:
+    a, b = Keyring(alice), Keyring(bob)
+    a.remember("bob", bob.public_b64)
+    b.remember("alice", alice.public_b64)
+
+    ciphertext, nonce = a.seal("bob", "hello 你好 🔐", "alice")
+
+    assert b.open("alice", ciphertext, nonce, "alice") == "hello 你好 🔐"
+
+
+def test_a_relabelled_sender_fails_to_decrypt(alice: Identity, bob: Identity) -> None:
+    """The sender's name is authenticated, so the server cannot claim a
+    message came from somebody else."""
+    a, b = Keyring(alice), Keyring(bob)
+    a.remember("bob", bob.public_b64)
+    b.remember("alice", alice.public_b64)
+    ciphertext, nonce = a.seal("bob", "hello", "alice")
+
+    with pytest.raises(DecryptionFailed):
+        b.open("alice", ciphertext, nonce, "carol")
+
+
+def test_rooms_are_not_encryptable_yet() -> None:
+    """A frame carries one body, so a room message would need one ciphertext
+    per member inside it. Named as a limitation rather than pretended."""
+    assert Keyring.encryptable("bob")
+    assert not Keyring.encryptable("#general")
+
+
+def test_a_changed_key_discards_the_derived_one(alice: Identity, bob: Identity) -> None:
+    ring = Keyring(alice)
+    ring.remember("bob", bob.public_b64)
+    first = ring._key("bob")
+
+    ring.remember("bob", Identity.generate().public_b64)
+
+    assert ring._key("bob") != first

@@ -18,6 +18,9 @@ from im.client.model.chat import ChatModel
 from im.client.net.connection import ServerConnection
 from im.client.view.console import ConsoleView
 from im.common.frames import MessageType
+from im.crypto.identity import Identity
+from im.crypto.keyring import Keyring
+from im.crypto.tls import client_context
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 5000
@@ -57,6 +60,20 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default="console",
         help="which view to run (tk arrives in phase 7)",
     )
+    parser.add_argument(
+        "--keyfile",
+        default=None,
+        help="where this user's private key lives (default: keys/<user>.key)",
+    )
+    parser.add_argument(
+        "--plaintext",
+        action="store_true",
+        help="turn end-to-end encryption off, so the server can read message bodies",
+    )
+    parser.add_argument("--tls", action="store_true", help="connect over TLS")
+    parser.add_argument(
+        "--cacert", default="dev.crt", help="certificate to trust when using --tls"
+    )
     parser.add_argument("--quiet", action="store_true", help="log warnings and errors only")
     return parser.parse_args(argv)
 
@@ -73,14 +90,26 @@ def main(argv: list[str] | None = None) -> int:
         print("The Tkinter view arrives in phase 7. Use --view console for now.")
         return 1
 
-    print(f"Socket to Ciphertext -- client {__version__}")
+    print(f"Semaphore -- client {__version__}")
     username = args.user or input("username: ").strip()
     password = args.password or getpass.getpass("password: ")
     digest = hash_password(password)
 
+    keyring = None
+    if not args.plaintext:
+        # Reused if it exists. A new key would make every message anybody had
+        # already sent to this user undecryptable.
+        keyfile = args.keyfile or f"keys/{username}.key"
+        keyring = Keyring(Identity.load_or_create(keyfile))
+
     model = ChatModel()
-    connection = ServerConnection(args.host, args.port)
-    controller = ChatController(connection, model)
+    connection = ServerConnection(
+        args.host,
+        args.port,
+        tls=client_context(args.cacert) if args.tls else None,
+        server_hostname="localhost" if args.tls else None,
+    )
+    controller = ChatController(connection, model, keyring=keyring)
     view = ConsoleView(controller)
 
     # The connection calls these on its reader thread; both only enqueue, so
@@ -95,7 +124,9 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         if args.register:
-            reply = connection.register(username, digest)
+            reply = connection.register(
+                username, digest, pubkey=keyring.public_b64 if keyring else None
+            )
             if reply.type is MessageType.ERROR:
                 print(f"  ! could not register: {reply.data.get('message')}")
                 return 1

@@ -55,8 +55,19 @@ messages; presence when someone logs in or drops; typing indicators; and
 live in sqlite. Kill the server, start it again, log back in: anything sent
 while you were away is delivered, and `/history` fetches the scrollback.
 
-What does **not** work yet: nothing is encrypted, and there is no GUI. Those
-are phases 6 and 7.
+**Messages are encrypted end to end.** Run the server with `--tls` and the
+clients with `--tls`, and the server routes and stores ciphertext it cannot
+read:
+
+```
+alice types :  the secret word is swordfish 🔐
+bob reads   :  the secret word is swordfish 🔐
+server holds:  LRg8O4SJrD//F9+Xh3AA2bCg3aH2bbz5u6+H2hp+uB4C1ZCv2sfK65mIhuMTRZHstQ==
+```
+
+What does **not** work yet: room messages are still sent in the clear, because
+a frame carries one body and a room message would need one ciphertext per
+member inside it. And there is no GUI. Those are phases 6b and 7.
 
 | Phase | What it adds | State |
 |-------|--------------|-------|
@@ -66,8 +77,8 @@ are phases 6 and 7.
 | 3 | Headless client: connection, model, console view | **done** |
 | 4 | Rooms and concurrent conversations | **done** |
 | 5 | Persistence, accounts, offline delivery | **done** |
-| 6 | TLS and end-to-end encryption | next |
-| 7 | Tkinter interface (design pass first) | |
+| 6 | TLS and end-to-end encryption | **done** |
+| 7 | Tkinter interface (design pass first) | next |
 | 8 | Internet demo, hardening, report | |
 
 ---

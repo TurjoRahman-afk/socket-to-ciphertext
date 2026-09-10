@@ -17,6 +17,7 @@ from im.client.model.chat import ChatModel
 from im.client.model.conversation import Message
 from im.common.frames import Frame, MessageType
 from im.common.ids import now_ms
+from im.crypto.envelope import DecryptionFailed
 
 log = logging.getLogger(__name__)
 
@@ -24,9 +25,19 @@ ROOM_PREFIX = "#"
 
 
 class ChatController:
-    def __init__(self, connection, model: ChatModel) -> None:
+    def __init__(self, connection, model: ChatModel, keyring=None) -> None:
         self.connection = connection
         self.model = model
+        # None means plaintext bodies. Encryption is a layer this class
+        # applies, not something the model or the view ever sees.
+        self.keyring = keyring
+        # Outgoing text waiting on a public key that has been asked for
+        # but has not arrived yet.
+        self._held: dict[str, list[str]] = {}
+        # Inbound encrypted frames waiting on the sender's key. A message
+        # can arrive from somebody we have never spoken to, so the first
+        # thing they say may well need a key fetch of its own.
+        self._awaiting: dict[str, list[Frame]] = {}
 
     # ---------------------------------------------------- gestures -> frames ---
 
@@ -41,16 +52,45 @@ class ChatController:
         if target is None or not text.strip():
             return None
 
-        frame = self.connection.message(target, text)
-        message = Message(
-            id=frame.id,
-            sender=self.model.username or "me",
-            body=text,
-            ts=frame.ts,
-            mine=True,
-        )
+        me = self.model.username or "me"
+
+        if self.keyring is not None and self.keyring.encryptable(target):
+            sealed = self.keyring.seal(target, text, me)
+            if sealed is None:
+                # No key yet. Ask for one and hold the message rather than
+                # sending it in the clear, which would silently break the
+                # promise the whole phase exists to make.
+                self._hold(target, text)
+                return None
+            ciphertext, nonce = sealed
+            frame = self.connection.message(target, ciphertext, nonce=nonce)
+        else:
+            frame = self.connection.message(target, text)
+
+        # The model always holds plaintext. A view renders what was typed,
+        # not what went on the wire.
+        message = Message(id=frame.id, sender=me, body=text, ts=frame.ts, mine=True)
         self.model.add_message(target, message)
         return message
+
+    def _hold(self, target: str, text: str) -> None:
+        """Queue a message until the recipient's public key arrives."""
+        first = target not in self._held
+        self._held.setdefault(target, []).append(text)
+        if first:
+            self.connection.get_key(target)
+
+    def _release(self, user: str) -> None:
+        """Send whatever was waiting on this person's key."""
+        waiting = self._held.pop(user, [])
+        if not waiting:
+            return
+        previous, self.model.active = self.model.active, user
+        try:
+            for text in waiting:
+                self.send(text)
+        finally:
+            self.model.active = previous
 
     def select(self, key: str) -> None:
         self.model.select(key)
@@ -95,6 +135,8 @@ class ChatController:
             self._presence(frame)
         elif frame.type is MessageType.TYPING:
             self._typing(frame)
+        elif frame.type is MessageType.KEY:
+            self._key(frame)
         elif frame.type is MessageType.HISTORY_RESULT:
             self._history_result(frame)
         elif frame.type is MessageType.ROOM_STATE:
@@ -128,16 +170,66 @@ class ChatController:
             log.warning("dropping a MSG with nobody to attribute it to")
             return
 
+        # An encrypted message from somebody whose key we do not hold yet
+        # cannot be read. Ask for the key and keep the frame rather than
+        # showing the user an error they can do nothing about.
+        if (
+            self.keyring is not None
+            and frame.nonce
+            and self.keyring.encryptable(key)
+            and not self.keyring.knows(key)
+        ):
+            first = key not in self._awaiting
+            self._awaiting.setdefault(key, []).append(frame)
+            if first:
+                self.connection.get_key(key)
+            return
+
+        self._file(frame, key)
+
+    def _file(self, frame: Frame, key: str) -> None:
+        """Put one inbound message into the model, decrypting if needed."""
         self.model.add_message(
             key,
             Message(
                 id=frame.id,
                 sender=frame.sender or "?",
-                body=frame.body or "",
+                body=self._plaintext(frame, key),
                 ts=frame.ts or now_ms(),
                 mine=False,
             ),
         )
+
+    def _key(self, frame: Frame) -> None:
+        """A public key arrived. Remember it and send anything held for them."""
+        user = frame.data.get("user")
+        pubkey = frame.data.get("pubkey")
+        if not user or not pubkey or self.keyring is None:
+            return
+        self.keyring.remember(str(user), str(pubkey))
+        self._release(str(user))
+        self._deliver_awaiting(str(user))
+
+    def _deliver_awaiting(self, user: str) -> None:
+        """Decrypt and show what arrived before we had this person's key."""
+        for frame in self._awaiting.pop(user, []):
+            self._file(frame, user)
+
+    def _plaintext(self, frame: Frame, peer: str) -> str:
+        """The readable body of an inbound message.
+
+        A frame with a nonce is encrypted. One that fails to decrypt is
+        reported in place rather than dropped -- a message the user cannot
+        read is something they need to know about, not something to hide.
+        """
+        body = frame.body or ""
+        if self.keyring is None or not frame.nonce:
+            return body
+        try:
+            return self.keyring.open(peer, body, frame.nonce, frame.sender or "")
+        except DecryptionFailed:
+            log.warning("could not decrypt a message from %s", peer)
+            return "[could not decrypt this message]"
 
     def _presence(self, frame: Frame) -> None:
         user = frame.data.get("user")

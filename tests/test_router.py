@@ -607,3 +607,60 @@ def test_a_server_with_no_store_says_so(router: MessageRouter) -> None:
     quiet(alice)
     history(router, alice, "bob")
     assert alice.last().data["code"] == "UNSUPPORTED"
+
+
+# ------------------------------------------------------------------- keys ---
+
+
+def test_a_public_key_given_at_registration_can_be_fetched(router: MessageRouter) -> None:
+    session = FakeSession()
+    router.handle(
+        session,
+        Frame(
+            type=MessageType.REGISTER,
+            data={"user": "alice", "pass_hash": HASH, "pubkey": "BASE64-ALICE"},
+        ),
+    )
+    bob = online(router, "bob")
+    quiet(bob)
+
+    router.handle(bob, Frame(type=MessageType.GET_KEY, data={"user": "alice"}))
+
+    assert bob.last().type is MessageType.KEY
+    assert bob.last().data == {"user": "alice", "pubkey": "BASE64-ALICE"}
+
+
+def test_a_user_without_a_key_answers_no_key(router: MessageRouter) -> None:
+    sign_up(router, FakeSession(), "alice")  # registered, but no pubkey
+    bob = online(router, "bob")
+    quiet(bob)
+
+    router.handle(bob, Frame(type=MessageType.GET_KEY, data={"user": "alice"}))
+
+    assert bob.last().data["code"] == "NO_KEY"
+
+
+def test_an_unknown_user_answers_the_same_as_a_user_without_a_key(
+    router: MessageRouter,
+) -> None:
+    """A different reply for each would turn GET_KEY into a way of finding
+    out who has registered."""
+    bob = online(router, "bob")
+    quiet(bob)
+
+    router.handle(bob, Frame(type=MessageType.GET_KEY, data={"user": "nobody"}))
+
+    assert bob.last().data["code"] == "NO_KEY"
+
+
+def test_get_key_needs_a_user(router: MessageRouter) -> None:
+    bob = online(router, "bob")
+    quiet(bob)
+    router.handle(bob, Frame(type=MessageType.GET_KEY, data={}))
+    assert bob.last().data["code"] == "NO_RECIPIENT"
+
+
+def test_keys_cannot_be_fetched_before_logging_in(router: MessageRouter) -> None:
+    session = FakeSession()
+    router.handle(session, Frame(type=MessageType.GET_KEY, data={"user": "alice"}))
+    assert session.last().data["code"] == "NOT_LOGGED_IN"

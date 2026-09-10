@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import socket
+import ssl
 import threading
 
 from im.server.handler import ClientHandler
@@ -33,10 +34,19 @@ class ChatServer:  # this represents the whole server
     """
 
     # by default the server will listen on 127.0.0.1:5000
-    def __init__(self, host: str = "127.0.0.1", port: int = 5000, db_path: str = MEMORY) -> None:
+    def __init__(
+        self,
+        host: str = "127.0.0.1",
+        port: int = 5000,
+        db_path: str = MEMORY,
+        tls: ssl.SSLContext | None = None,
+    ) -> None:
         self.host = host
         self.port = port
         self.db = Database(db_path)
+        # None means plaintext. TLS is opt-in so a developer can still
+        # point telnet at the port and read the protocol.
+        self.tls = tls
         self.sessions = SessionRegistry()
         self.rooms = SqliteRooms(self.db)
         self.users = SqliteUsers(self.db)
@@ -83,6 +93,16 @@ class ChatServer:  # this represents the whole server
                 # Expected: shutdown() closes the listening socket, which
                 # makes the blocking accept() fail.
                 break
+
+            if self.tls is not None:
+                try:
+                    conn = self.tls.wrap_socket(conn, server_side=True)
+                except (ssl.SSLError, OSError) as exc:
+                    # A failed handshake is one client's problem, not the
+                    # server's. Log it and carry on accepting.
+                    log.warning("TLS handshake failed for %s:%s: %s", *peer, exc)
+                    conn.close()
+                    continue
 
             handler = ClientHandler(conn, peer, self.router)
             with self._lock:

@@ -76,6 +76,8 @@ class MessageRouter:
             self._typing(session, frame)
         elif frame.type is MessageType.HISTORY:
             self._history(session, frame)
+        elif frame.type is MessageType.GET_KEY:
+            self._get_key(session, frame)
         else:
             session.send(error("UNSUPPORTED", f"{frame.type} arrives in a later phase"))
 
@@ -105,7 +107,10 @@ class MessageRouter:
         if username.startswith(ROOM_PREFIX):
             session.send(error("BAD_USERNAME", f"a username may not start with {ROOM_PREFIX}"))
             return
-        if not self.users.register(username, pass_hash):
+        # The public key is optional so that a client built before phase 6
+        # still works. Without one, nobody can encrypt to this user.
+        pubkey = frame.data.get("pubkey")
+        if not self.users.register(username, pass_hash, pubkey=pubkey):
             session.send(error("USER_EXISTS", f"{username} is taken"))
             return
 
@@ -156,6 +161,31 @@ class MessageRouter:
         # After LOGIN_OK, so the client already knows who it is and has its
         # roster before messages start arriving.
         self._flush_pending(session, username)
+
+    def _get_key(self, session: Session, frame: Frame) -> None:
+        """Hand out somebody's public key.
+
+        Public by definition -- it is what everyone needs in order to encrypt
+        to this person, and it reveals nothing. The private half never leaves
+        the client that generated it and never appears in this database.
+
+        An account with no key and a name with no account both answer NO_KEY.
+        A different reply for each would turn this into a way of discovering
+        who has registered.
+        """
+        user = frame.data.get("user")
+        if not user:
+            session.send(error("NO_RECIPIENT", "GET_KEY needs a user"))
+            return
+
+        pubkey = self.users.pubkey(str(user))
+        if pubkey is None:
+            session.send(error("NO_KEY", f"no public key is published for {user}"))
+            return
+
+        session.send(
+            Frame(type=MessageType.KEY, data={"user": str(user), "pubkey": pubkey})
+        )
 
     # --------------------------------------------------------------- rooms ---
 
