@@ -169,8 +169,9 @@ def test_the_conversation_list_shows_unread_counts(view) -> None:
     view.model.add_message("bob", _message("hello"))
     view.root.update_idletasks()
 
-    rows = view.conversations.get(0, "end")
-    assert any("bob" in row and "(1)" in row for row in rows)
+    assert "bob" in view.conversation_keys()
+    assert view.model.conversation("bob").unread == 1
+    assert "1 unread" in view.unread_label["text"]
 
 
 def test_selecting_a_conversation_redraws_the_transcript(view) -> None:
@@ -178,11 +179,10 @@ def test_selecting_a_conversation_redraws_the_transcript(view) -> None:
     view.model.add_message("bob", _message("second"))
 
     view.controller.select("bob")
-    view.root.update_idletasks()
+    view.root.update()
 
-    shown = view.transcript.get("1.0", "end")
+    shown = view.rendered_text()
     assert "first" in shown and "second" in shown
-    assert "bob" in view.peer_label["text"]
 
 
 def test_a_room_name_gets_its_marker(view) -> None:
@@ -198,11 +198,11 @@ def test_both_views_can_watch_one_model(view) -> None:
     try:
         view.controller.select("bob")
         view.model.add_message("bob", _message("seen by both"))
-        view.root.update_idletasks()
+        view.root.update()
 
         # The Tk window drew it, and the console view rendered the same event
         # to stdout from the same model, with neither knowing about the other.
-        assert "seen by both" in view.transcript.get("1.0", "end")
+        assert "seen by both" in view.rendered_text()
         assert view.model.conversation("bob").last().body == "seen by both"
     finally:
         console._unsubscribe()

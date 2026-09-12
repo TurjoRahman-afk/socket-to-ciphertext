@@ -1,8 +1,7 @@
-"""The Tkinter interface. Phase 7.
+"""The Tkinter interface. Phase 7, restyled to the team's design mockup.
 
 A second view over the same ChatModel the console view uses. Nothing below
-this package changed to make it possible -- that was the point of keeping the
-model free of any interface for six phases.
+this package changed to make either of them possible.
 
 The one rule that matters
 -------------------------
@@ -20,15 +19,20 @@ somewhere unrelated. So:
 post_frame and post_state are the only methods a worker thread may call, and
 both do nothing but put an item on a queue.
 
-Layout follows the mockup in the team's design document: a navigation rail, a
-conversation list, and a message pane.
+Layout
+------
+Three columns, following the mockup: a navigation rail, the conversation
+list, and the message pane. Everything with a curve in it -- buttons,
+bubbles, avatars, unread badges -- is drawn on a Canvas, because Tk has no
+rounded corners of its own. Those pieces live in widgets.py; this file wires
+them to the model.
 """
 
 from __future__ import annotations
 
 import queue
 import tkinter as tk
-from tkinter import messagebox, simpledialog, ttk
+from tkinter import messagebox, simpledialog
 
 from im.client.controller.chat import ChatController
 from im.client.model.conversation import Message
@@ -45,6 +49,8 @@ from im.client.model.events import (
     TypingChanged,
     UnreadChanged,
 )
+from im.client.view.tk import theme as t
+from im.client.view.tk.widgets import ConversationRow, NavItem, PillButton, Transcript
 from im.common.frames import Frame
 
 #: How often the main thread drains the queue. Fast enough that a message
@@ -54,17 +60,8 @@ POLL_MS = 50
 #: How long after the last keystroke we tell the other end we stopped typing.
 TYPING_IDLE_MS = 1500
 
-# Taken from the mockup in the design document.
-PURPLE = "#6D3BC4"
-CREAM = "#FDF6E7"
-LIST_BG = "#FBF1DC"
-AMBER = "#F3C563"
-AMBER_DEEP = "#EFB43C"
-BUBBLE = "#FFFFFF"
-BUBBLE_MINE = "#FFF8E6"
-INK = "#2A2118"
-MUTED = "#8A7A62"
-ORANGE = "#E2801E"
+RAIL_WIDTH = 190
+LIST_WIDTH = 260
 
 
 class TkView:
@@ -77,15 +74,16 @@ class TkView:
         self._inbox: queue.Queue = queue.Queue()
         self._typing_after: str | None = None
         self._announced_typing = False
+        self._rows: dict[str, ConversationRow] = {}
 
-        # A caller may supply the window. The tests do, because creating
-        # and destroying a Tk root repeatedly in one process eventually
-        # corrupts the Tcl interpreter.
+        # A caller may supply the window. The tests do, because creating and
+        # destroying a Tk root repeatedly in one process eventually corrupts
+        # the Tcl interpreter.
         self.root = root if root is not None else tk.Tk()
         self.root.title("Semaphore")
-        self.root.geometry("940x600")
-        self.root.minsize(720, 420)
-        self.root.configure(bg=CREAM)
+        self.root.geometry("1040x660")
+        self.root.minsize(840, 520)
+        self.root.configure(bg=t.PAGE)
 
         self._build()
         self._unsubscribe = self.model.subscribe(self._render)
@@ -105,137 +103,170 @@ class TkView:
 
     def _build(self) -> None:
         self.root.columnconfigure(2, weight=1)
-        self.root.rowconfigure(1, weight=1)
-
-        bar = tk.Frame(self.root, bg=PURPLE, height=34)
-        bar.grid(row=0, column=0, columnspan=3, sticky="ew")
-        bar.grid_propagate(False)
-        self.title_label = tk.Label(
-            bar, text="  Semaphore", bg=PURPLE, fg="white",
-            font=("Segoe UI", 11, "bold"), anchor="w",
-        )
-        self.title_label.pack(side="left", fill="y")
-        self.status_label = tk.Label(
-            bar, text="connecting", bg=PURPLE, fg="#D9C9F5", font=("Segoe UI", 9)
-        )
-        self.status_label.pack(side="right", padx=12)
-
+        self.root.rowconfigure(0, weight=1)
         self._build_rail()
         self._build_list()
         self._build_chat()
 
     def _build_rail(self) -> None:
-        rail = tk.Frame(self.root, bg=CREAM, width=168)
-        rail.grid(row=1, column=0, sticky="ns")
+        rail = tk.Frame(self.root, bg=t.RAIL, width=RAIL_WIDTH)
+        rail.grid(row=0, column=0, sticky="nsew")
         rail.grid_propagate(False)
+        rail.columnconfigure(0, weight=1)
 
-        tk.Label(
-            rail, text="💬 Semaphore", bg=CREAM, fg=ORANGE,
-            font=("Segoe UI", 12, "bold"),
-        ).pack(pady=(18, 22), padx=14, anchor="w")
+        logo = tk.Canvas(rail, height=64, bg=t.RAIL, highlightthickness=0)
+        logo.pack(fill="x", padx=16, pady=(16, 8))
+        logo.bind("<Configure>", lambda _e: self._draw_logo(logo))
 
-        tk.Button(
-            rail, text="+  New Message", command=self._new_conversation,
-            bg=AMBER, fg=INK, relief="flat", font=("Segoe UI", 9, "bold"),
-            activebackground=AMBER_DEEP, cursor="hand2", pady=6,
-        ).pack(fill="x", padx=14)
-
-        for label, command in (
-            ("Chats", lambda: None),
-            ("New room", self._new_room),
-            ("Join room", self._join_room),
-            ("Contacts", self._show_contacts),
-        ):
-            tk.Button(
-                rail, text=label, command=command, bg=CREAM, fg=INK,
-                relief="flat", anchor="w", font=("Segoe UI", 9),
-                activebackground=LIST_BG, cursor="hand2", pady=5,
-            ).pack(fill="x", padx=14, pady=(10, 0))
-
-        self.me_label = tk.Label(
-            rail, text="", bg=CREAM, fg=MUTED, font=("Segoe UI", 8), anchor="w"
+        PillButton(rail, "+  New Message", self._new_conversation).pack(
+            fill="x", padx=16, pady=(4, 14)
         )
-        self.me_label.pack(side="bottom", fill="x", padx=14, pady=12)
+
+        self.nav: dict[str, NavItem] = {}
+        for key, icon, label, command in (
+            ("chats", "💬", "Chats", lambda: None),
+            ("contacts", "👥", "Contacts", self._show_contacts),
+            ("rooms", "#", "Rooms", self._room_menu),
+            ("settings", "⚙", "Settings", self._show_settings),
+        ):
+            item = NavItem(rail, icon, label, command)
+            item.pack(fill="x", padx=10, pady=1)
+            self.nav[key] = item
+        self.nav["chats"].set_selected(True)
+
+        self.me = tk.Canvas(rail, height=58, bg=t.RAIL, highlightthickness=0)
+        self.me.pack(side="bottom", fill="x", padx=8, pady=10)
+        self.me.bind("<Configure>", lambda _e: self._draw_me())
+
+    def _draw_logo(self, canvas: tk.Canvas) -> None:
+        canvas.delete("all")
+        h = canvas.winfo_height()
+        t.rounded_rect(canvas, 4, h / 2 - 17, 38, h / 2 + 17, 11, fill=t.ORANGE, outline="")
+        canvas.create_text(21, h / 2 - 1, text="💬", font=(t.FONT, 13), fill=t.WHITE)
+        canvas.create_text(
+            50, h / 2, text="Semaphore", anchor="w", fill=t.ORANGE_DEEP, font=t.H1
+        )
+
+    def _draw_me(self) -> None:
+        self.me.delete("all")
+        w, h = self.me.winfo_width(), self.me.winfo_height()
+        if w < 2:
+            return
+        name = self.model.username or "…"
+        t.draw_avatar(self.me, 26, h / 2, name, radius=17, status=t.ONLINE)
+        self.me.create_text(50, h / 2 - 8, text=name, anchor="w", fill=t.BROWN, font=t.BODY_BOLD)
+        self.me.create_text(
+            50, h / 2 + 9, text=self.model.connection_state.title(), anchor="w",
+            fill=t.MUTED, font=t.TINY,
+        )
 
     def _build_list(self) -> None:
-        panel = tk.Frame(self.root, bg=LIST_BG, width=210)
-        panel.grid(row=1, column=1, sticky="ns")
+        panel = tk.Frame(self.root, bg=t.LIST_BG, width=LIST_WIDTH)
+        panel.grid(row=0, column=1, sticky="nsew")
         panel.grid_propagate(False)
+        panel.rowconfigure(1, weight=1)
+        panel.columnconfigure(0, weight=1)
 
-        self.conversations = tk.Listbox(
-            panel, bg=LIST_BG, fg=INK, relief="flat", highlightthickness=0,
-            font=("Segoe UI", 9), selectbackground=AMBER, selectforeground=INK,
-            activestyle="none",
+        head = tk.Frame(panel, bg=t.LIST_BG, height=54)
+        head.grid(row=0, column=0, sticky="ew")
+        head.grid_propagate(False)
+        tk.Label(
+            head, text="Chats", bg=t.LIST_BG, fg=t.BROWN, font=t.H2, anchor="w"
+        ).pack(side="left", padx=18, pady=14)
+        self.unread_label = tk.Label(head, text="", bg=t.LIST_BG, fg=t.MUTED, font=t.TINY)
+        self.unread_label.pack(side="right", padx=16)
+
+        self.list_frame = tk.Frame(panel, bg=t.LIST_BG)
+        self.list_frame.grid(row=1, column=0, sticky="nsew", padx=2)
+        self.list_frame.columnconfigure(0, weight=1)
+
+        self.empty_list = tk.Label(
+            self.list_frame,
+            text="No conversations yet.\nPress New Message to start one.",
+            bg=t.LIST_BG, fg=t.MUTED, font=t.SMALL, justify="center",
         )
-        self.conversations.pack(fill="both", expand=True, padx=8, pady=8)
-        self.conversations.bind("<<ListboxSelect>>", self._on_pick)
-        self._keys: list[str] = []
+        self.empty_list.grid(row=0, column=0, pady=40)
 
     def _build_chat(self) -> None:
-        pane = tk.Frame(self.root, bg=AMBER)
-        pane.grid(row=1, column=2, sticky="nsew")
+        pane = tk.Frame(self.root, bg=t.CREAM)
+        pane.grid(row=0, column=2, sticky="nsew")
         pane.rowconfigure(1, weight=1)
         pane.columnconfigure(0, weight=1)
 
-        header = tk.Frame(pane, bg=AMBER_DEEP, height=40)
-        header.grid(row=0, column=0, sticky="ew")
-        header.grid_propagate(False)
-        self.peer_label = tk.Label(
-            header, text="  no conversation selected", bg=AMBER_DEEP, fg=INK,
-            font=("Segoe UI", 10, "bold"), anchor="w",
-        )
-        self.peer_label.pack(side="left", fill="y")
-        self.typing_label = tk.Label(
-            header, text="", bg=AMBER_DEEP, fg="#6B5836", font=("Segoe UI", 8, "italic")
-        )
-        self.typing_label.pack(side="right", padx=12)
+        self.header = tk.Canvas(pane, height=64, bg=t.WHITE, highlightthickness=0)
+        self.header.grid(row=0, column=0, sticky="ew")
+        self.header.bind("<Configure>", lambda _e: self._draw_header())
 
-        self.transcript = tk.Text(
-            pane, bg=AMBER, relief="flat", highlightthickness=0, wrap="word",
-            font=("Segoe UI", 10), padx=16, pady=12, state="disabled", cursor="arrow",
-        )
+        self.transcript = Transcript(pane)
         self.transcript.grid(row=1, column=0, sticky="nsew")
 
-        # Tk has no rounded bubbles. Justification, a light background and
-        # generous spacing get close enough to read as one.
-        self.transcript.tag_configure(
-            "theirs", background=BUBBLE, foreground=INK, justify="left",
-            lmargin1=8, lmargin2=8, rmargin=140, spacing1=4, spacing3=8, borderwidth=6,
-            relief="flat",
-        )
-        self.transcript.tag_configure(
-            "mine", background=BUBBLE_MINE, foreground=INK, justify="right",
-            lmargin1=140, rmargin=8, spacing1=4, spacing3=8, borderwidth=6, relief="flat",
-        )
-        self.transcript.tag_configure(
-            "who", foreground=MUTED, font=("Segoe UI", 8), spacing1=6
-        )
-        self.transcript.tag_configure(
-            "system", foreground="#7A6743", font=("Segoe UI", 8, "italic"), justify="center",
-            spacing1=6, spacing3=6,
-        )
-
-        composer = tk.Frame(pane, bg=AMBER)
-        composer.grid(row=2, column=0, sticky="ew", padx=12, pady=(0, 12))
+        composer = tk.Frame(pane, bg=t.CREAM)
+        composer.grid(row=2, column=0, sticky="ew", padx=16, pady=14)
         composer.columnconfigure(0, weight=1)
 
-        self.entry = ttk.Entry(composer, font=("Segoe UI", 10))
-        self.entry.grid(row=0, column=0, sticky="ew", ipady=5)
+        box = tk.Frame(composer, bg=t.WHITE, highlightthickness=1, highlightbackground=t.HAIRLINE)
+        box.grid(row=0, column=0, sticky="ew", ipady=7)
+        self.entry = tk.Entry(
+            box, font=t.BODY, relief="flat", bg=t.WHITE, fg=t.BROWN,
+            insertbackground=t.ORANGE_DEEP,
+        )
+        self.entry.pack(fill="x", padx=14)
         self.entry.bind("<Return>", self._on_send)
         self.entry.bind("<Key>", self._on_key)
 
-        self.send_button = tk.Button(
-            composer, text="Send", command=self._on_send, bg=PURPLE, fg="white",
-            relief="flat", font=("Segoe UI", 9, "bold"), cursor="hand2", padx=18,
+        self.send_button = PillButton(
+            composer, "➤", self._on_send, height=42, radius=21, font=(t.FONT, 13), bg=t.CREAM
         )
-        self.send_button.grid(row=0, column=1, padx=(8, 0))
+        self.send_button.configure(width=52)
+        self.send_button.grid(row=0, column=1, padx=(10, 0))
         self._set_composer(enabled=False)
+
+    def _draw_header(self) -> None:
+        self.header.delete("all")
+        w, h = self.header.winfo_width(), self.header.winfo_height()
+        if w < 2:
+            return
+        self.header.create_line(0, h - 1, w, h - 1, fill=t.HAIRLINE)
+
+        active = self.model.active
+        if active is None:
+            self.header.create_text(
+                24, h / 2, text="Select a conversation", anchor="w",
+                fill=t.MUTED, font=t.BODY,
+            )
+            return
+
+        room = active.startswith("#")
+        t.draw_avatar(
+            self.header, 36, h / 2, active, radius=19,
+            status=None if room else (t.ONLINE if self.model.is_online(active) else t.OFFLINE),
+        )
+        self.header.create_text(
+            66, h / 2 - 9, text=active, anchor="w", fill=t.BROWN, font=t.H2
+        )
+
+        typing = self.model.typing_in(active)
+        if typing:
+            subtitle, colour = f"{', '.join(typing)} is typing…", t.ORANGE_DEEP
+        elif room:
+            members = self.model.room_members(active)
+            subtitle, colour = f"{len(members)} members", t.MUTED
+        else:
+            subtitle = "Online" if self.model.is_online(active) else "Offline"
+            colour = t.ONLINE if self.model.is_online(active) else t.MUTED
+        self.header.create_text(66, h / 2 + 10, text=subtitle, anchor="w", fill=colour, font=t.TINY)
+
+        for i, icon in enumerate(("⋯", "☎", "🎥")):
+            self.header.create_text(
+                w - 24 - i * 34, h / 2, text=icon, fill=t.MUTED, font=(t.FONT, 12)
+            )
 
     # -------------------------------------------------------------- the loop ---
 
     def run(self) -> None:
         self.root.after(POLL_MS, self._poll)
         self._refresh_list()
+        self._redraw()
         self.root.mainloop()
 
     def _poll(self) -> None:
@@ -249,7 +280,7 @@ class TkView:
                     elif kind == "state":
                         self.controller.on_state(payload)
                 except Exception as exc:  # noqa: BLE001 -- a view must not die
-                    self._system(f"{type(exc).__name__}: {exc}")
+                    self.transcript.notice(f"{type(exc).__name__}: {exc}")
         except queue.Empty:
             pass
         self.root.after(POLL_MS, self._poll)
@@ -268,7 +299,7 @@ class TkView:
         self.entry.delete(0, "end")
         self._stop_typing()
         if self.controller.send(text) is None:
-            self._system("not sent -- pick a conversation first")
+            self.transcript.notice("not sent — pick a conversation first")
 
     def _on_key(self, _event: object) -> None:
         """Announce typing, and stop announcing once the keys go quiet."""
@@ -289,25 +320,26 @@ class TkView:
             self._announced_typing = False
             self.controller.typing(False)
 
-    def _on_pick(self, _event: object) -> None:
-        selection = self.conversations.curselection()
-        if selection:
-            self.controller.select(self._keys[selection[0]])
-
     def _new_conversation(self) -> None:
         who = simpledialog.askstring("New message", "Who do you want to talk to?", parent=self.root)
         if who and who.strip():
             self.controller.select(who.strip())
 
-    def _new_room(self) -> None:
-        room = simpledialog.askstring("New room", "Room name:", parent=self.root)
-        if room and room.strip():
-            self.controller.create_room(self._hashed(room))
-
-    def _join_room(self) -> None:
-        room = simpledialog.askstring("Join room", "Room name:", parent=self.root)
-        if room and room.strip():
-            self.controller.join(self._hashed(room))
+    def _room_menu(self) -> None:
+        room = simpledialog.askstring(
+            "Rooms", "Room name (it will be created if it does not exist):", parent=self.root
+        )
+        if not room or not room.strip():
+            return
+        name = self._hashed(room)
+        # Join first; the server answers NO_SUCH_ROOM if it is new, and the
+        # error handler offers to create it. Asking the user which of the two
+        # they meant would be a question they should not have to answer.
+        if name in self.model.rooms:
+            self.controller.join(name)
+        else:
+            self.controller.create_room(name)
+        self.controller.select(name)
 
     @staticmethod
     def _hashed(room: str) -> str:
@@ -318,7 +350,19 @@ class TkView:
         online = self.model.online_users()
         messagebox.showinfo(
             "Contacts",
-            "\n".join(online) if online else "Nobody else is online.",
+            "\n".join(f"●  {name}" for name in online) if online else "Nobody else is online.",
+            parent=self.root,
+        )
+
+    def _show_settings(self) -> None:
+        model = self.model
+        messagebox.showinfo(
+            "Settings",
+            f"Signed in as {model.username}\n"
+            f"Connection: {model.connection_state}\n"
+            f"Conversations: {len(model.conversations)}\n"
+            f"Rooms: {', '.join(model.my_rooms()) or 'none'}\n"
+            f"Unread: {model.unread_total()}",
             parent=self.root,
         )
 
@@ -328,75 +372,88 @@ class TkView:
         """The model's observer. Only ever called from the main thread."""
         if isinstance(event, MessageAdded):
             if event.conversation == self.model.active:
-                self._append(event.message)
-            self._refresh_list()
-        elif isinstance(event, ConversationSelected):
-            self._redraw()
-        elif isinstance(event, HistoryLoaded):
-            if event.conversation == self.model.active:
                 self._redraw()
+            self._refresh_list()
+        elif isinstance(event, ConversationSelected | HistoryLoaded):
+            self._redraw()
+            self._refresh_list()
         elif isinstance(event, UnreadChanged | RoomMembersChanged | RosterReplaced):
             self._refresh_list()
         elif isinstance(event, PresenceChanged):
             self._refresh_list()
-            self._system(f"{event.user} is {'online' if event.online else 'offline'}")
+            self._draw_header()
+            self.transcript.notice(
+                f"{event.user} is {'online' if event.online else 'offline'}"
+            )
         elif isinstance(event, TypingChanged):
-            if event.conversation == self.model.active and event.users:
-                who = ", ".join(event.users)
-                self.typing_label.config(text=f"{who} is typing…")
-            else:
-                self.typing_label.config(text="")
+            self._draw_header()
         elif isinstance(event, ConnectionStateChanged):
-            self.status_label.config(text=event.state.lower())
             self._set_composer(enabled=event.state == "ONLINE")
-            self.me_label.config(text=f"signed in as {self.model.username or '?'}")
+            self._draw_me()
         elif isinstance(event, ErrorRaised):
-            self._system(f"{event.code}: {event.message}")
+            self.transcript.notice(f"{event.code}: {event.message}")
 
     def _set_composer(self, *, enabled: bool) -> None:
         """The composer is enabled in exactly one connection state."""
-        state = "normal" if enabled else "disabled"
-        self.entry.config(state=state)
-        self.send_button.config(state=state)
+        self.entry.config(state="normal" if enabled else "disabled")
+        self.send_button.set_enabled(enabled)
 
     def _refresh_list(self) -> None:
         keys = self.model.keys()
-        self._keys = keys
-        self.conversations.delete(0, "end")
-        for key in keys:
+
+        for key in list(self._rows):
+            if key not in keys:
+                self._rows.pop(key).destroy()
+
+        self.empty_list.grid_remove() if keys else self.empty_list.grid()
+
+        for index, key in enumerate(keys):
+            row = self._rows.get(key)
+            if row is None:
+                row = ConversationRow(self.list_frame, key, self.controller.select)
+                self._rows[key] = row
+            row.grid(row=index, column=0, sticky="ew", padx=6, pady=1)
+
             conversation = self.model.conversation(key)
-            mark = "●" if self.model.is_online(key) else ("#" if key.startswith("#") else "○")
-            unread = f"  ({conversation.unread})" if conversation.unread else ""
-            self.conversations.insert("end", f" {mark} {key}{unread}")
-            if key == self.model.active:
-                self.conversations.selection_clear(0, "end")
-                self.conversations.selection_set("end")
+            last = conversation.last()
+            preview = "" if last is None else f"{'You: ' if last.mine else ''}{last.body}"
+            row.update_row(
+                preview=preview,
+                time_text=Transcript._clock(last.ts) if last else "",
+                unread=conversation.unread,
+                status=None
+                if key.startswith("#")
+                else (t.ONLINE if self.model.is_online(key) else t.OFFLINE),
+            )
+            row.set_selected(key == self.model.active)
+
+        total = self.model.unread_total()
+        self.unread_label.config(text=f"{total} unread" if total else "")
+        self.nav["chats"].set_badge(total)
 
     def _redraw(self) -> None:
+        self._draw_header()
         active = self.model.active
-        self.peer_label.config(text=f"  {active}" if active else "  no conversation selected")
-        self.typing_label.config(text="")
-
-        self.transcript.config(state="normal")
-        self.transcript.delete("1.0", "end")
-        self.transcript.config(state="disabled")
-
         if active is None:
+            self.transcript.show([], "No messages yet")
             return
-        for message in self.model.conversation(active).messages:
-            self._append(message)
-        self._refresh_list()
+        self.transcript.show(self.model.conversation(active).messages, f"Say hi to {active}")
+
+    # --------------------------------------------------------------- testing ---
+
+    def rendered_text(self) -> str:
+        """Everything currently drawn in the message pane.
+
+        The transcript is a Canvas rather than a Text widget, because Tk
+        cannot draw a rounded bubble any other way. This is how a test reads
+        what the user can see.
+        """
+        return self.transcript.as_text()
+
+    def conversation_keys(self) -> list[str]:
+        """The conversation list, in the order drawn."""
+        return self.model.keys()
 
     def _append(self, message: Message) -> None:
-        self.transcript.config(state="normal")
-        if not message.mine:
-            self.transcript.insert("end", f"{message.sender}\n", "who")
-        self.transcript.insert("end", f"{message.body}\n", "mine" if message.mine else "theirs")
-        self.transcript.config(state="disabled")
-        self.transcript.see("end")
-
-    def _system(self, text: str) -> None:
-        self.transcript.config(state="normal")
-        self.transcript.insert("end", f"{text}\n", "system")
-        self.transcript.config(state="disabled")
-        self.transcript.see("end")
+        """Kept so a caller can push one message without a full redraw."""
+        self._redraw()
