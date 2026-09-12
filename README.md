@@ -72,6 +72,8 @@ same model as the console one:
 python -m im.client --view tk --user aya --password pw --register
 ```
 
+![The Semaphore window](docs/semaphore-window.png)
+
 A navigation rail, a conversation list with unread counts and presence dots,
 and a message pane with typing indicators. The composer is enabled only while
 the connection is ONLINE.
