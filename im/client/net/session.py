@@ -80,7 +80,10 @@ class Session:
 
         if register:
             reply = connection.register(self.username, self.pass_hash, pubkey=self.pubkey)
-            if reply.type is MessageType.ERROR:
+            # An account that already exists is not a failure to register --
+            # it is the second time somebody ran the same command. Anything
+            # else (a bad username, a missing field) still stops here.
+            if reply.type is MessageType.ERROR and reply.data.get("code") != "USER_EXISTS":
                 connection.close()
                 return reply
 
