@@ -1,5 +1,10 @@
 # Normalise line endings so teammates on Windows, macOS and Linux see the same
 # bytes. The protocol itself is newline-delimited; keep the repo consistent.
 * text=auto eol=lf
+
+# cmd.exe requires CRLF in a batch file. With LF only it misparses the
+# script and the window closes before anything runs.
+*.bat text eol=crlf
+*.cmd text eol=crlf
 *.png binary
 *.pem binary
