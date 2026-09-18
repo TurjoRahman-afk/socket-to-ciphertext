@@ -34,13 +34,22 @@ log = logging.getLogger(__name__)
 
 RECV_BYTES = 4096
 
-#: Frames allowed to queue up for the server before we give up. Far smaller
-#: than the server's limit: a client with a hundred unsent messages has a
-#: broken connection, not a busy one.
+#: Frames allowed to queue up for the server before we give up.
 OUTBOX_LIMIT = 100
+
+#: How long a full outbox is allowed to stay full before the connection is
+#: considered stalled. Without this, a burst of more than OUTBOX_LIMIT
+#: messages killed the connection instantly -- the original code assumed a
+#: full queue meant a broken link, when it can just as easily mean the writer
+#: thread has not been scheduled yet.
+OUTBOX_WAIT = 0.5
 
 #: How long login() and register() wait for the server to answer.
 REPLY_TIMEOUT = 5.0
+
+#: How long close() gives the writer thread to send what is already
+#: queued before the socket goes away.
+FLUSH_SECONDS = 2.0
 
 #: How often the heartbeat sends a PING once the connection is ONLINE.
 HEARTBEAT_SECONDS = 15.0
@@ -182,6 +191,14 @@ class ServerConnection:
             self._outbox.put_nowait(_STOP)
         except queue.Full:
             pass
+
+        # Let the writer finish what is already queued. Closing the socket
+        # immediately threw away everything still waiting -- a client that
+        # sent a message and quit would silently never have sent it.
+        writer = self._writer
+        if writer is not None and writer is not threading.current_thread():
+            writer.join(timeout=FLUSH_SECONDS)
+
         if self._sock is not None:
             try:
                 self._sock.close()
@@ -247,8 +264,17 @@ class ServerConnection:
             raise NotConnected(f"cannot send while {self._machine.state}")
         try:
             self._outbox.put_nowait(frame)
+            return
         except queue.Full:
-            log.warning("outbox full, dropping the connection")
+            pass
+
+        # Full, which usually means the writer thread simply has not caught up
+        # with a burst. Wait briefly rather than tearing the connection down;
+        # only a queue that stays full is a stalled link.
+        try:
+            self._outbox.put(frame, timeout=OUTBOX_WAIT)
+        except queue.Full:
+            log.warning("outbox still full after %.1fs, dropping the connection", OUTBOX_WAIT)
             self.close()
             raise NotConnected("the server is not keeping up; connection dropped") from None
 
