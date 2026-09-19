@@ -292,6 +292,12 @@ class ServerConnection:
         the server relays it and nobody acknowledges it."""
         self.send(Frame(type=MessageType.TYPING, to=to, data={"on": bool(on)}))
 
+    def receipt(self, to: str, ref: str, state: str) -> None:
+        """Tell a sender their message arrived, or was read."""
+        self.send(
+            Frame(type=MessageType.RECEIPT, to=to, data={"ref": ref, "state": state})
+        )
+
     def get_key(self, user: str) -> None:
         """Ask for somebody's public key. The answer arrives as a KEY frame."""
         self.send(Frame(type=MessageType.GET_KEY, data={"user": user}))

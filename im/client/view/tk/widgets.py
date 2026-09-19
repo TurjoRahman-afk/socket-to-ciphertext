@@ -268,10 +268,20 @@ class Transcript(tk.Canvas):
         )
 
         stamp = self._clock(message.ts)
-        if stamp:
+        if mine:
+            # One tick sent, two delivered, two in colour read -- the
+            # convention every messenger uses, so it needs no explaining.
+            tick = {"SENT": "✓", "DELIVERED": "✓✓", "READ": "✓✓"}.get(message.state, "")
+            colour = t.ORANGE_DEEP if message.state == "READ" else t.MUTED
+            if stamp or tick:
+                self.create_text(
+                    right, y + bubble_h + 3, text=f"{stamp}  {tick}".strip(),
+                    anchor="ne", fill=colour, font=t.TINY,
+                )
+        elif stamp:
             self.create_text(
-                right if mine else left, y + bubble_h + 3, text=stamp,
-                anchor="ne" if mine else "nw", fill=t.MUTED, font=t.TINY,
+                left, y + bubble_h + 3, text=stamp, anchor="nw",
+                fill=t.MUTED, font=t.TINY,
             )
         return y + bubble_h + self.GAP + 10
 

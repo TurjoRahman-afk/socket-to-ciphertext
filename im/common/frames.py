@@ -35,6 +35,7 @@ class MessageType(StrEnum):
     JOIN = "JOIN"
     LEAVE = "LEAVE"
     TYPING = "TYPING"
+    RECEIPT = "RECEIPT"
     HISTORY = "HISTORY"
     PING = "PING"
 

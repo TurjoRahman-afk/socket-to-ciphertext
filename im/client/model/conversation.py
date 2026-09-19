@@ -25,6 +25,11 @@ class Message:
     body: str
     ts: int
     mine: bool = False
+    #: Only meaningful for your own messages: SENT, DELIVERED or READ.
+    #: Frozen, so a change means replacing the message in the list -- which
+    #: is what makes a receipt an event the view can render rather than a
+    #: mutation it has to notice.
+    state: str = "SENT"
 
 
 @dataclass(slots=True)

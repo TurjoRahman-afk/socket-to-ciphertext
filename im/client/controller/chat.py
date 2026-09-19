@@ -93,7 +93,26 @@ class ChatController:
             self.model.active = previous
 
     def select(self, key: str) -> None:
+        """Put a conversation on screen, and tell the other side it was read.
+
+        Only what is actually unread is reported. Re-reporting the whole
+        conversation every time it is opened would send one receipt per
+        message per glance.
+        """
+        unread = [
+            m
+            for m in self.model.conversation(key).messages
+            if not m.mine and self.model.conversation(key).unread
+        ]
         self.model.select(key)
+
+        if key.startswith(ROOM_PREFIX):
+            return
+        for message in unread:
+            try:
+                self.connection.receipt(message.sender, message.id, "READ")
+            except Exception:  # noqa: BLE001 -- see _file
+                log.debug("could not send a read receipt")
 
     def ping(self) -> None:
         self.connection.ping()
@@ -135,6 +154,8 @@ class ChatController:
             self._presence(frame)
         elif frame.type is MessageType.TYPING:
             self._typing(frame)
+        elif frame.type is MessageType.RECEIPT:
+            self._receipt(frame)
         elif frame.type is MessageType.KEY:
             self._key(frame)
         elif frame.type is MessageType.HISTORY_RESULT:
@@ -189,6 +210,15 @@ class ChatController:
 
     def _file(self, frame: Frame, key: str) -> None:
         """Put one inbound message into the model, decrypting if needed."""
+        # Report delivery as soon as it is in the model, not when it is drawn.
+        # A view that is slow to paint has still received the message, and
+        # tying the receipt to rendering would make it a lie on a busy client.
+        if frame.sender and not key.startswith(ROOM_PREFIX):
+            try:
+                self.connection.receipt(frame.sender, frame.id, "DELIVERED")
+            except Exception:  # noqa: BLE001 -- a receipt is never worth failing a message over
+                log.debug("could not send a delivery receipt")
+
         self.model.add_message(
             key,
             Message(
@@ -199,6 +229,14 @@ class ChatController:
                 mine=False,
             ),
         )
+
+    def _receipt(self, frame: Frame) -> None:
+        """A message of ours arrived at, or was read by, the other end."""
+        ref = frame.data.get("ref")
+        state = frame.data.get("state")
+        who = frame.sender
+        if ref and state and who:
+            self.model.set_receipt(str(who), str(ref), str(state))
 
     def _key(self, frame: Frame) -> None:
         """A public key arrived. Remember it and send anything held for them."""

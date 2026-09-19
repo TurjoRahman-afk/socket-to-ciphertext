@@ -48,6 +48,15 @@ class UnreadChanged:
 
 
 @dataclass(frozen=True, slots=True)
+class ReceiptChanged:
+    """One of your messages arrived, or was read."""
+
+    conversation: str
+    message_id: str
+    state: str
+
+
+@dataclass(frozen=True, slots=True)
 class HistoryLoaded:
     """Scrollback arrived from the server and replaced what was held."""
 
@@ -104,6 +113,7 @@ Event = (
     | UnreadChanged
     | TypingChanged
     | HistoryLoaded
+    | ReceiptChanged
     | RoomMembersChanged
     | ConversationSelected
     | ConnectionStateChanged

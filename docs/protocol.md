@@ -49,6 +49,7 @@ because the server has to route what it cannot read.
 | `MSG` | to, body, nonce | `ACK`, then fan-out |
 | `CREATE_ROOM` / `JOIN` / `LEAVE` | room | `ROOM_STATE` |
 | `TYPING` | to, on / off | relayed only |
+| `RECEIPT` | to, ref, state | relayed to the sender |
 | `HISTORY` | room, before, limit | `HISTORY_RESULT` |
 | `PING` | -- | `PONG` |
 
@@ -57,6 +58,8 @@ because the server has to route what it cannot read.
 | Type | Payload |
 |------|---------|
 | `MSG` | from, to, body, nonce, ts, id |
+| `RECEIPT` | from, ref, state |
+| `ROOM_STATE` | room, members |
 | `PRESENCE` | user, ONLINE / OFFLINE |
 | `ERROR` | code, message |
 
@@ -73,7 +76,8 @@ exponential backoff.
 | Maximum line length | 1 MiB | A peer that opens a connection and streams bytes without ever sending a newline would otherwise grow the receive buffer until the server runs out of memory. Exceeding it closes the connection. |
 | Encoding | UTF-8, never escaped | Non-ASCII travels as itself, so a packet trace stays readable during the demo and fewer bytes go on the wire. |
 | Line ending | `
-` | A trailing `` is stripped on receipt, so a telnet session on Windows works by hand. |
+` | A trailing `
+` is stripped on receipt, so a telnet session on Windows works by hand. |
 
 ## Error codes
 
@@ -93,3 +97,39 @@ exponential backoff.
   reserved field names in the table above.
 - Never assume one `recv()` returns one frame. Buffer the bytes and split on
   the delimiter; `LineBuffer` is the only place in the project that does this.
+
+## Receipts
+
+A message passes through three states from its sender's point of view.
+
+| State | Means | Set by |
+|-------|-------|--------|
+| `SENT` | The server accepted and stored it. This is what `ACK` reports. | the server |
+| `DELIVERED` | The recipient's client received it and put it in its model. | the recipient's client |
+| `READ` | The recipient opened the conversation containing it. | the recipient's client |
+
+A `RECEIPT` frame carries `ref`, the id of the message it concerns, and
+`state`, one of `DELIVERED` or `READ`. Rules:
+
+- **Only the recipient may report on a message.** The server looks the
+  message up and relays the receipt to its sender alone. Without that,
+  anybody who learned a message id could claim somebody else had read it.
+- **A receipt never moves the state backwards.** The two can cross on the
+  wire, and a `DELIVERED` arriving after a `READ` is discarded.
+- **Being read implies having arrived**, even if the delivery receipt was
+  lost.
+- If the sender is offline the receipt is not queued. The state is stored
+  against the message, so `HISTORY` carries it when they return.
+- Room messages produce no receipts. One message with twenty members would
+  mean forty receipts, and the protocol has nowhere to record twenty separate
+  per-member states.
+
+## Additional error codes
+
+| Code | Meaning |
+|------|---------|
+| `NO_KEY` | No public key is published for that user, or no such user. |
+| `NOT_A_MEMBER` | Sending to, reading the history of, or leaving a room you are not in. |
+| `ROOM_EXISTS` | `CREATE_ROOM` for a room that already exists. |
+| `BAD_ROOM` | A room name missing its `#`, empty, over 32 characters, or containing whitespace. |
+| `BAD_RECEIPT` | A `RECEIPT` without a `ref`, or with a state other than `DELIVERED` or `READ`. |

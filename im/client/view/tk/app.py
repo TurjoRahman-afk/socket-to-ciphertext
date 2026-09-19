@@ -44,6 +44,7 @@ from im.client.model.events import (
     HistoryLoaded,
     MessageAdded,
     PresenceChanged,
+    ReceiptChanged,
     RoomMembersChanged,
     RosterReplaced,
     TypingChanged,
@@ -374,6 +375,9 @@ class TkView:
             if event.conversation == self.model.active:
                 self._redraw()
             self._refresh_list()
+        elif isinstance(event, ReceiptChanged):
+            if event.conversation == self.model.active:
+                self._redraw()
         elif isinstance(event, ConversationSelected | HistoryLoaded):
             self._redraw()
             self._refresh_list()

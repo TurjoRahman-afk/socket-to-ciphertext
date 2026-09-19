@@ -50,7 +50,12 @@ CREATE TABLE IF NOT EXISTS messages (
     recipient     TEXT    NOT NULL,
     body          TEXT,
     nonce         TEXT,
-    ts            INTEGER NOT NULL
+    ts            INTEGER NOT NULL,
+    -- When the recipient's client acknowledged receiving it, and when the
+    -- recipient actually looked at it. Null until each happens; the two are
+    -- separate because arriving and being read are different claims.
+    delivered_at  INTEGER,
+    read_at       INTEGER
 );
 
 -- History is always read as "the newest N in this conversation", so the

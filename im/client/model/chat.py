@@ -20,6 +20,7 @@ Three rules hold this file's value:
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import replace
 
 from im.client.model.conversation import Conversation, Message
 from im.client.model.events import (
@@ -31,6 +32,7 @@ from im.client.model.events import (
     IdentityEstablished,
     MessageAdded,
     PresenceChanged,
+    ReceiptChanged,
     RoomMembersChanged,
     RosterReplaced,
     TypingChanged,
@@ -152,6 +154,27 @@ class ChatModel:
         conversation = self.conversation(key)
         conversation.messages = list(messages)
         self._emit(HistoryLoaded(key, len(messages)))
+
+    def set_receipt(self, key: str, message_id: str, state: str) -> None:
+        """Move one of your own messages to DELIVERED or READ.
+
+        Messages are frozen, so this replaces the one in the list. Receipts
+        never move backwards: a delivery receipt arriving after a read one --
+        which happens when the two cross on the wire -- is ignored.
+        """
+        order = {"SENT": 0, "DELIVERED": 1, "READ": 2}
+        conversation = self.conversations.get(key)
+        if conversation is None:
+            return
+
+        for index, message in enumerate(conversation.messages):
+            if message.id != message_id:
+                continue
+            if order.get(state, 0) <= order.get(message.state, 0):
+                return
+            conversation.messages[index] = replace(message, state=state)
+            self._emit(ReceiptChanged(key, message_id, state))
+            return
 
     def select(self, key: str | None) -> None:
         """Put a conversation on screen, which also marks it read."""

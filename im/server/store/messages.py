@@ -21,6 +21,11 @@ from im.server.store.db import Database
 #: create a second conversation that looks like an existing one.
 PAIR_SEPARATOR = "\x1f"
 
+#: The three states a message can be in, from the sender's point of view.
+SENT = "SENT"
+DELIVERED = "DELIVERED"
+READ = "READ"
+
 #: How many messages a HISTORY request returns when it does not say.
 DEFAULT_LIMIT = 50
 MAX_LIMIT = 200
@@ -72,6 +77,51 @@ class MessageStore:
                 "INSERT OR IGNORE INTO pending (message_id, username) VALUES (?, ?)",
                 (message_id, username),
             )
+
+    def mark(self, message_id: str, state: str, when: int) -> str | None:
+        """Record that a message was delivered or read. Returns its sender.
+
+        The sender is returned because the receipt is only of interest to
+        them, and the caller would otherwise have to look the message up a
+        second time to find out who to tell.
+
+        A later receipt never overwrites an earlier one: `delivered` arriving
+        after `read` would otherwise walk the state backwards when two
+        receipts cross on the wire.
+        """
+        column = "read_at" if state == READ else "delivered_at"
+        with self.db.write() as conn:
+            row = conn.execute(
+                "SELECT sender FROM messages WHERE id = ?", (message_id,)
+            ).fetchone()
+            if row is None:
+                return None
+            conn.execute(
+                f"UPDATE messages SET {column} = ? WHERE id = ? AND {column} IS NULL",
+                (when, message_id),
+            )
+            # Being read implies having arrived, even if that receipt was lost.
+            if state == READ:
+                conn.execute(
+                    "UPDATE messages SET delivered_at = ?"
+                    " WHERE id = ? AND delivered_at IS NULL",
+                    (when, message_id),
+                )
+        return str(row["sender"])
+
+    def state_of(self, message_id: str) -> str:
+        """SENT, DELIVERED or READ."""
+        with self.db.read() as conn:
+            row = conn.execute(
+                "SELECT delivered_at, read_at FROM messages WHERE id = ?", (message_id,)
+            ).fetchone()
+        if row is None:
+            return SENT
+        if row["read_at"] is not None:
+            return READ
+        if row["delivered_at"] is not None:
+            return DELIVERED
+        return SENT
 
     # ------------------------------------------------------------ reading ---
 

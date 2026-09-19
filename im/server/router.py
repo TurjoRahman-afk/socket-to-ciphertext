@@ -14,8 +14,9 @@ from __future__ import annotations
 import logging
 
 from im.common.frames import Frame, MessageType, error
+from im.common.ids import now_ms
 from im.server.registries import RoomRegistry, Session, SessionRegistry
-from im.server.store.messages import MessageStore, direct_conversation
+from im.server.store.messages import DELIVERED, READ, MessageStore, direct_conversation
 from im.server.store.users import SqliteUsers
 
 log = logging.getLogger(__name__)
@@ -74,6 +75,8 @@ class MessageRouter:
             self._leave(session, frame)
         elif frame.type is MessageType.TYPING:
             self._typing(session, frame)
+        elif frame.type is MessageType.RECEIPT:
+            self._receipt(session, frame)
         elif frame.type is MessageType.HISTORY:
             self._history(session, frame)
         elif frame.type is MessageType.GET_KEY:
@@ -404,6 +407,11 @@ class MessageRouter:
                             "body": row["body"],
                             "n": row["nonce"],
                             "ts": row["ts"],
+                            "state": (
+                                READ
+                                if row["read_at"]
+                                else (DELIVERED if row["delivered_at"] else "SENT")
+                            ),
                         }
                         for row in rows
                     ],
@@ -427,6 +435,46 @@ class MessageRouter:
                     ts=row["ts"],
                 )
             )
+
+    # ------------------------------------------------------------ receipts ---
+
+    def _receipt(self, session: Session, frame: Frame) -> None:
+        """Record that a message arrived or was read, and tell its sender.
+
+        Only the recipient of a message may report on it. Without that check
+        anybody who learned a message id could claim somebody else had read
+        it, which is a small lie the sender has no way to detect.
+        """
+        if self.messages is None:
+            return
+
+        ref = frame.data.get("ref")
+        state = frame.data.get("state")
+        if not ref or state not in (DELIVERED, READ):
+            session.send(error("BAD_RECEIPT", "a receipt needs a ref and a state"))
+            return
+
+        sender = self.messages.mark(str(ref), str(state), now_ms())
+        if sender is None or sender == session.username:
+            # Unknown message, or somebody reporting on their own -- neither
+            # is worth an error, and neither has anyone to notify.
+            return
+
+        recipient = self.sessions.get(sender)
+        if recipient is None:
+            # The sender is away. The state is stored, so HISTORY will carry
+            # it when they come back; there is no need to queue the receipt
+            # itself.
+            return
+
+        recipient.send(
+            Frame(
+                type=MessageType.RECEIPT,
+                sender=session.username,
+                to=sender,
+                data={"ref": str(ref), "state": str(state)},
+            )
+        )
 
     # -------------------------------------------------------------- typing ---
 

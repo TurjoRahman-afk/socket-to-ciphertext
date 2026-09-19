@@ -33,6 +33,7 @@ from im.client.model.events import (
     HistoryLoaded,
     MessageAdded,
     PresenceChanged,
+    ReceiptChanged,
     RoomMembersChanged,
     RosterReplaced,
     TypingChanged,
@@ -215,6 +216,9 @@ class ConsoleView:
             print(f"\n  -- {event.count} message(s) in {event.conversation} --")
             for message in self.model.conversation(event.conversation).messages:
                 print(f"  {self._line(message)}")
+        elif isinstance(event, ReceiptChanged):
+            if event.conversation == self.model.active:
+                print(f"\n  * your message was {event.state.lower()}")
         elif isinstance(event, TypingChanged):
             if event.users and event.conversation == self.model.active:
                 who = ", ".join(event.users)
@@ -237,7 +241,12 @@ class ConsoleView:
 
     def _line(self, message) -> str:
         who = "you" if message.mine else message.sender
-        return f"{who}: {message.body}"
+        tick = ""
+        if message.mine:
+            tick = {"SENT": " ✓", "DELIVERED": " ✓✓", "READ": " ✓✓ read"}.get(
+                message.state, ""
+            )
+        return f"{who}: {message.body}{tick}"
 
     def _history(self) -> None:
         """Ask the server rather than replaying what is in memory.

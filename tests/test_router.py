@@ -664,3 +664,114 @@ def test_keys_cannot_be_fetched_before_logging_in(router: MessageRouter) -> None
     session = FakeSession()
     router.handle(session, Frame(type=MessageType.GET_KEY, data={"user": "alice"}))
     assert session.last().data["code"] == "NOT_LOGGED_IN"
+
+
+# ---------------------------------------------------------------- receipts ---
+
+
+def receipt(router: MessageRouter, session: FakeSession, ref: str, state: str) -> None:
+    router.handle(
+        session, Frame(type=MessageType.RECEIPT, data={"ref": ref, "state": state})
+    )
+
+
+def test_a_delivery_receipt_reaches_the_sender(stored: MessageRouter) -> None:
+    alice = online(stored, "alice")
+    bob = online(stored, "bob")
+    sent = Frame(type=MessageType.MSG, to="bob", body="did this arrive?")
+    stored.handle(alice, sent)
+    quiet(alice, bob)
+
+    receipt(stored, bob, sent.id, "DELIVERED")
+
+    assert alice.last().type is MessageType.RECEIPT
+    assert alice.last().data == {"ref": sent.id, "state": "DELIVERED"}
+    assert alice.last().sender == "bob"
+
+
+def test_a_read_receipt_reaches_the_sender(stored: MessageRouter) -> None:
+    alice = online(stored, "alice")
+    bob = online(stored, "bob")
+    sent = Frame(type=MessageType.MSG, to="bob", body="read this")
+    stored.handle(alice, sent)
+    quiet(alice, bob)
+
+    receipt(stored, bob, sent.id, "READ")
+
+    assert alice.last().data["state"] == "READ"
+    assert stored.messages.state_of(sent.id) == "READ"
+
+
+def test_being_read_implies_having_arrived(stored: MessageRouter) -> None:
+    """A delivery receipt can be lost. A read one proves both."""
+    alice = online(stored, "alice")
+    bob = online(stored, "bob")
+    sent = Frame(type=MessageType.MSG, to="bob", body="hi")
+    stored.handle(alice, sent)
+
+    receipt(stored, bob, sent.id, "READ")
+
+    with stored.messages.db.read() as conn:
+        row = conn.execute(
+            "SELECT delivered_at, read_at FROM messages WHERE id = ?", (sent.id,)
+        ).fetchone()
+    assert row["delivered_at"] is not None
+    assert row["read_at"] is not None
+
+
+def test_a_receipt_never_walks_the_state_backwards(stored: MessageRouter) -> None:
+    """The two can cross on the wire, and DELIVERED must not undo READ."""
+    alice = online(stored, "alice")
+    bob = online(stored, "bob")
+    sent = Frame(type=MessageType.MSG, to="bob", body="hi")
+    stored.handle(alice, sent)
+
+    receipt(stored, bob, sent.id, "READ")
+    receipt(stored, bob, sent.id, "DELIVERED")
+
+    assert stored.messages.state_of(sent.id) == "READ"
+
+
+def test_a_receipt_for_an_unknown_message_is_ignored(stored: MessageRouter) -> None:
+    bob = online(stored, "bob")
+    quiet(bob)
+    receipt(stored, bob, "no-such-message", "READ")
+    assert bob.outbox == []
+
+
+def test_a_receipt_needs_a_ref_and_a_valid_state(stored: MessageRouter) -> None:
+    bob = online(stored, "bob")
+    quiet(bob)
+
+    router_handle = stored.handle
+    router_handle(bob, Frame(type=MessageType.RECEIPT, data={"state": "READ"}))
+    assert bob.last().data["code"] == "BAD_RECEIPT"
+
+    router_handle(bob, Frame(type=MessageType.RECEIPT, data={"ref": "x", "state": "SEEN"}))
+    assert bob.last().data["code"] == "BAD_RECEIPT"
+
+
+def test_a_receipt_for_a_sender_who_is_away_is_stored_not_lost(stored: MessageRouter) -> None:
+    """The state survives in history, so it shows when they come back."""
+    alice = online(stored, "alice")
+    bob = online(stored, "bob")
+    sent = Frame(type=MessageType.MSG, to="bob", body="hi")
+    stored.handle(alice, sent)
+    stored.on_disconnect(alice)
+
+    receipt(stored, bob, sent.id, "READ")
+
+    assert stored.messages.state_of(sent.id) == "READ"
+
+
+def test_history_carries_the_receipt_state(stored: MessageRouter) -> None:
+    alice = online(stored, "alice")
+    bob = online(stored, "bob")
+    sent = Frame(type=MessageType.MSG, to="bob", body="hi")
+    stored.handle(alice, sent)
+    receipt(stored, bob, sent.id, "READ")
+    quiet(alice)
+
+    history(stored, alice, "bob")
+
+    assert alice.last().data["messages"][0]["state"] == "READ"
