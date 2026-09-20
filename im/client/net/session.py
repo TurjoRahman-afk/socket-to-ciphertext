@@ -225,8 +225,14 @@ class Session:
     def history(self, room: str, before: int | None = None, limit: int = 50) -> None:
         self._live().history(room, before=before, limit=limit)
 
-    def create_room(self, room: str) -> None:
-        self._live().create_room(room)
+    def receipt(self, to: str, ref: str, state: str) -> None:
+        self._live().receipt(to, ref, state)
+
+    def create_room(self, room: str, members: list[str] | None = None) -> None:
+        self._live().create_room(room, members)
+
+    def invite(self, room: str, members: list[str]) -> None:
+        self._live().invite(room, members)
 
     def join(self, room: str) -> None:
         self._live().join(room)

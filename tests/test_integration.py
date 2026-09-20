@@ -7,6 +7,7 @@ work when there are several of them running at once.
 
 from __future__ import annotations
 
+import inspect
 import threading
 import time
 from collections.abc import Iterator
@@ -422,3 +423,38 @@ def test_somebody_invited_later_gets_the_next_message(server: ChatServer) -> Non
     finally:
         for conn in (alice, bob):
             conn.close()
+
+
+def test_a_session_forwards_everything_a_connection_can_send() -> None:
+    """Session must offer exactly what ServerConnection offers.
+
+    This is here because it has now gone wrong twice. Session stands in for a
+    ServerConnection so the controller never notices a reconnect, but the
+    forwarding is written by hand -- so a method added to ServerConnection is
+    simply absent from Session until somebody remembers. Nothing catches it:
+    the controller tests use a fake that has every method, the integration
+    tests drive a ServerConnection directly, and the one caller that would
+    notice is inside a try/except.
+
+    The failure is invisible rather than loud. Under pythonw there is no
+    console, so the AttributeError goes nowhere and the button appears dead.
+    """
+    sending = {
+        "message",
+        "typing",
+        "receipt",
+        "get_key",
+        "history",
+        "create_room",
+        "invite",
+        "join",
+        "leave",
+        "ping",
+    }
+    missing = {name for name in sending if not hasattr(Session, name)}
+    assert not missing, f"Session cannot forward: {sorted(missing)}"
+
+    for name in sorted(sending):
+        theirs = inspect.signature(getattr(ServerConnection, name))
+        ours = inspect.signature(getattr(Session, name))
+        assert ours == theirs, f"Session.{name}{ours} does not match ServerConnection{theirs}"

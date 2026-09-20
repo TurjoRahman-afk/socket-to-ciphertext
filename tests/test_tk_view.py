@@ -229,7 +229,7 @@ def make_dialog(tk_root, contacts, **kwargs):
 def test_the_room_dialog_returns_the_name_and_who_was_ticked(tk_root) -> None:
     dialog = make_dialog(tk_root, ["aya", "keisha", "faiza"])
     try:
-        dialog._name_var.set("study group")
+        dialog._name_var.set("study-group")
         dialog._checks["aya"].set(True)
         dialog._checks["faiza"].set(True)
         dialog._accept()
@@ -237,7 +237,7 @@ def test_the_room_dialog_returns_the_name_and_who_was_ticked(tk_root) -> None:
         if dialog.winfo_exists():
             dialog.destroy()
 
-    assert dialog.result == ("study group", ["aya", "faiza"])
+    assert dialog.result == ("study-group", ["aya", "faiza"])
 
 
 def test_the_room_dialog_refuses_an_empty_name(tk_root) -> None:
@@ -302,10 +302,34 @@ def test_what_is_typed_is_what_is_returned(tk_root) -> None:
     """
     dialog = make_dialog(tk_root, [])
     try:
-        dialog._name_entry.insert(0, "study group")
+        dialog._name_entry.insert(0, "study-group")
         dialog._accept()
     finally:
         if dialog.winfo_exists():
             dialog.destroy()
 
-    assert dialog.result == ("study group", [])
+    assert dialog.result == ("study-group", [])
+
+
+def test_a_room_name_with_a_space_is_refused_in_the_dialog(tk_root) -> None:
+    """The server rejects it with BAD_ROOM. Finding that out from a notice in
+    a room that was never created is a bad way to learn about a space."""
+    dialog = make_dialog(tk_root, [])
+    try:
+        dialog._name_var.set("study group")
+        dialog._accept()
+        assert dialog.result is None
+        assert "spaces" in dialog._complaint.cget("text")
+    finally:
+        dialog.destroy()
+
+
+def test_the_dialog_agrees_with_the_server_about_names() -> None:
+    """Both rules in one place, so they cannot drift apart quietly."""
+    from im.client.view.tk.room_dialog import name_problem
+
+    assert name_problem("study-group") is None
+    assert name_problem("") is not None
+    assert name_problem("study group") is not None
+    assert name_problem("#") is not None
+    assert name_problem("x" * 40) is not None

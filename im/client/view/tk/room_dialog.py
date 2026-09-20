@@ -29,6 +29,25 @@ ROW_HEIGHT = t.px(30)
 WIDTH = t.px(330)
 
 
+#: The server's rule, checked here as well. Finding out from a red notice in
+#: a room that was never created is a bad way to learn your name had a space
+#: in it -- the dialog is still open, so it can just say so.
+MAX_NAME = 31
+
+
+def name_problem(name: str) -> str | None:
+    """Why this room name will not do, or None if it is fine."""
+    if not name:
+        return "A room needs a name."
+    if any(character.isspace() for character in name):
+        return "A room name cannot contain spaces. Try study-group."
+    if len(name.lstrip("#")) > MAX_NAME:
+        return f"A room name is at most {MAX_NAME} characters."
+    if not name.lstrip("#"):
+        return "A room needs a name after the #."
+    return None
+
+
 class RoomDialog(tk.Toplevel):
     """Ask for a room name and a set of members.
 
@@ -104,6 +123,14 @@ class RoomDialog(tk.Toplevel):
         )
         self._name_entry.pack(fill="x", ipady=t.px(6), pady=(t.px(6), 0))
         self._name_entry.configure(width=1)  # width comes from the pack, not from a character count
+
+        # Reserved rather than created on demand, so the dialog does not
+        # change height the moment you get something wrong.
+        self._complaint = tk.Label(
+            frame, text="", bg=t.PAGE, fg=t.ORANGE_DEEP, font=t.TINY,
+            anchor="w", wraplength=WIDTH,
+        )
+        self._complaint.pack(fill="x", pady=(t.px(4), 0))
         if self._fixed_room is not None:
             self._name_entry.configure(state="readonly", readonlybackground=t.CREAM)
 
@@ -248,7 +275,9 @@ class RoomDialog(tk.Toplevel):
 
     def _accept(self) -> None:
         name = self._name_var.get().strip()
-        if not name:
+        problem = name_problem(name)
+        if problem is not None:
+            self._complaint.configure(text=problem)
             self._name_entry.configure(highlightbackground=t.ORANGE_DEEP)
             self._name_entry.focus_set()
             return

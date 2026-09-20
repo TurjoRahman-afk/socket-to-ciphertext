@@ -30,6 +30,7 @@ them to the model.
 
 from __future__ import annotations
 
+import logging
 import queue
 import tkinter as tk
 from tkinter import messagebox, simpledialog
@@ -57,6 +58,8 @@ from im.common.frames import Frame
 
 #: How often the main thread drains the queue. Fast enough that a message
 #: feels immediate, slow enough that an idle client is not busy-waiting.
+log = logging.getLogger(__name__)
+
 POLL_MS = 50
 
 #: How long after the last keystroke we tell the other end we stopped typing.
@@ -86,6 +89,12 @@ class TkView:
         self.root.geometry(f"{t.px(1060)}x{t.px(680)}")
         self.root.minsize(t.px(840), t.px(520))
         self.root.configure(bg=t.PAGE)
+
+        # Tk sends callback exceptions to stderr. The app is launched with
+        # pythonw so that no console sits behind the window, and pythonw has
+        # no stderr -- so a broken button did not look broken, it looked like
+        # nothing had happened at all. That cost an evening once already.
+        self.root.report_callback_exception = self._on_callback_error
 
         self._build()
         self._unsubscribe = self.model.subscribe(self._render)
@@ -450,6 +459,17 @@ class TkView:
             self._draw_me()
         elif isinstance(event, ErrorRaised):
             self.transcript.notice(f"{event.code}: {event.message}")
+
+    def _on_callback_error(self, exc_type, value, trace) -> None:
+        """Show what Tk would otherwise have thrown away."""
+        log.exception("callback failed", exc_info=(exc_type, value, trace))
+        messagebox.showerror(
+            "Something went wrong",
+            f"{exc_type.__name__}: {value}\n\n"
+            "This is a bug in Semaphore, not something you did. "
+            "The details are in the log.",
+            parent=self.root,
+        )
 
     def _set_composer(self, *, enabled: bool) -> None:
         """The composer is enabled in exactly one connection state."""
