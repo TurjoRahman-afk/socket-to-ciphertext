@@ -212,3 +212,100 @@ def _message(body: str):
     from im.client.model.conversation import Message
 
     return Message(id="m1", sender="bob", body=body, ts=1_700_000_000_000, mine=False)
+
+
+# ------------------------------------------------------------- room dialog ---
+
+
+def make_dialog(tk_root, contacts, **kwargs):
+    """Build the dialog without entering wait_window, which would block."""
+    from im.client.view.tk.room_dialog import RoomDialog
+
+    dialog = RoomDialog(tk_root, contacts, **kwargs)
+    dialog.withdraw()  # keep the test run from flashing windows at whoever ran it
+    return dialog
+
+
+def test_the_room_dialog_returns_the_name_and_who_was_ticked(tk_root) -> None:
+    dialog = make_dialog(tk_root, ["aya", "keisha", "faiza"])
+    try:
+        dialog._name_var.set("study group")
+        dialog._checks["aya"].set(True)
+        dialog._checks["faiza"].set(True)
+        dialog._accept()
+    finally:
+        if dialog.winfo_exists():
+            dialog.destroy()
+
+    assert dialog.result == ("study group", ["aya", "faiza"])
+
+
+def test_the_room_dialog_refuses_an_empty_name(tk_root) -> None:
+    """Accepting would send CREATE_ROOM for a room called "#"."""
+    dialog = make_dialog(tk_root, ["aya"])
+    try:
+        dialog._name_var.set("   ")
+        dialog._accept()
+        assert dialog.result is None
+        assert dialog.winfo_exists()  # still open, waiting for a real name
+    finally:
+        dialog.destroy()
+
+
+def test_cancelling_the_room_dialog_answers_nothing(tk_root) -> None:
+    dialog = make_dialog(tk_root, ["aya"])
+    dialog._name_var.set("study")
+    dialog._cancel()
+
+    assert dialog.result is None
+
+
+def test_a_room_can_be_made_with_nobody_in_it(tk_root) -> None:
+    """Being the only person online should not stop you making a room."""
+    dialog = make_dialog(tk_root, [])
+    try:
+        dialog._name_var.set("notes")
+        dialog._accept()
+    finally:
+        if dialog.winfo_exists():
+            dialog.destroy()
+
+    assert dialog.result == ("notes", [])
+
+
+def test_inviting_does_not_offer_people_already_in_the_room(tk_root) -> None:
+    dialog = make_dialog(
+        tk_root, ["aya", "keisha"], room="#study", already_in={"aya"}, title="Add people"
+    )
+    try:
+        assert set(dialog._checks) == {"keisha"}
+    finally:
+        dialog.destroy()
+
+
+def test_the_room_name_cannot_be_edited_when_inviting(tk_root) -> None:
+    """The room is context here, not a question -- editing it would rename
+    nothing and silently make a different room."""
+    dialog = make_dialog(tk_root, ["aya"], room="#study")
+    try:
+        assert dialog._name_entry.cget("state") == "readonly"
+        assert dialog._name_var.get() == "study"
+    finally:
+        dialog.destroy()
+
+
+def test_what_is_typed_is_what_is_returned(tk_root) -> None:
+    """The entry must really be bound to the variable the dialog reads.
+
+    Tk accepts any string as a textvariable, so a mistyped binding does not
+    raise -- it just silently reads a variable nothing is typing into.
+    """
+    dialog = make_dialog(tk_root, [])
+    try:
+        dialog._name_entry.insert(0, "study group")
+        dialog._accept()
+    finally:
+        if dialog.winfo_exists():
+            dialog.destroy()
+
+    assert dialog.result == ("study group", [])

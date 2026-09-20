@@ -377,3 +377,48 @@ def test_a_session_stops_retrying_when_closed(tmp_path) -> None:
 
     assert session._stopped.is_set()
     assert not session._supervisor.is_alive() or session._stopped.is_set()
+
+
+def test_a_room_created_with_members_reaches_them(server: ChatServer) -> None:
+    """The whole feature over a real socket: name a room, name who is in it,
+    and the first message lands without anybody having had to JOIN."""
+    alice_in: list[Frame] = []
+    bob_in: list[Frame] = []
+    carol_in: list[Frame] = []
+
+    alice = join(server, "alice", alice_in)
+    bob = join(server, "bob", bob_in)
+    carol = join(server, "carol", carol_in)
+
+    try:
+        alice.create_room("#study", ["bob", "carol"])
+        assert wait_until(lambda: server.rooms.members("#study") == {"alice", "bob", "carol"})
+
+        alice.message("#study", "first meeting is friday")
+
+        assert wait_until(lambda: "first meeting is friday" in bodies(bob_in))
+        assert wait_until(lambda: "first meeting is friday" in bodies(carol_in))
+    finally:
+        for conn in (alice, bob, carol):
+            conn.close()
+
+
+def test_somebody_invited_later_gets_the_next_message(server: ChatServer) -> None:
+    alice_in: list[Frame] = []
+    bob_in: list[Frame] = []
+
+    alice = join(server, "alice", alice_in)
+    bob = join(server, "bob", bob_in)
+
+    try:
+        alice.create_room("#study")
+        assert wait_until(lambda: server.rooms.members("#study") == {"alice"})
+
+        alice.invite("#study", ["bob"])
+        assert wait_until(lambda: "bob" in server.rooms.members("#study"))
+
+        alice.message("#study", "you are in")
+        assert wait_until(lambda: "you are in" in bodies(bob_in))
+    finally:
+        for conn in (alice, bob):
+            conn.close()

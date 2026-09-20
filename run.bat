@@ -7,7 +7,8 @@ REM
 REM  Close the server window to stop everything. The clients will notice and
 REM  sit in RETRYING until it comes back, which is worth watching.
 
-cd /d "%~dp0"
+REM change the current directory to the run.bat directory 
+cd /d "%~dp0"   
 
 if not exist ".venv\Scripts\python.exe" (
   echo   The virtual environment is missing. Run this first:

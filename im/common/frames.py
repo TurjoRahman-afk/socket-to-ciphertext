@@ -34,6 +34,7 @@ class MessageType(StrEnum):
     CREATE_ROOM = "CREATE_ROOM"
     JOIN = "JOIN"
     LEAVE = "LEAVE"
+    INVITE = "INVITE"
     TYPING = "TYPING"
     RECEIPT = "RECEIPT"
     HISTORY = "HISTORY"

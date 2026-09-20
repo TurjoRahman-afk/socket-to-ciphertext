@@ -31,8 +31,16 @@ class FakeConnection:
     def typing(self, to: str, on: bool = True) -> None:
         self.sent.append(Frame(type=MessageType.TYPING, to=to, data={"on": on}))
 
-    def create_room(self, room: str) -> None:
-        self.sent.append(Frame(type=MessageType.CREATE_ROOM, data={"room": room}))
+    def create_room(self, room: str, members: list[str] | None = None) -> None:
+        data: dict = {"room": room}
+        if members:
+            data["members"] = list(members)
+        self.sent.append(Frame(type=MessageType.CREATE_ROOM, data=data))
+
+    def invite(self, room: str, members: list[str]) -> None:
+        self.sent.append(
+            Frame(type=MessageType.INVITE, data={"room": room, "members": list(members)})
+        )
 
     def join(self, room: str) -> None:
         self.sent.append(Frame(type=MessageType.JOIN, data={"room": room}))
@@ -280,3 +288,29 @@ def test_leaving_removes_you_from_your_rooms(parts) -> None:
         Frame(type=MessageType.ROOM_STATE, data={"room": "#general", "members": ["bob"]})
     )
     assert model.my_rooms() == []
+
+
+def test_a_room_can_be_created_with_members(parts) -> None:
+    connection, _, controller = parts
+
+    controller.create_room("#study", ["aya", "keisha"])
+
+    assert connection.sent[0].data == {"room": "#study", "members": ["aya", "keisha"]}
+
+
+def test_creating_a_room_with_nobody_sends_no_member_list(parts) -> None:
+    """An empty list would be noise on the wire, and the server ignores it."""
+    connection, _, controller = parts
+
+    controller.create_room("#study", [])
+
+    assert "members" not in connection.sent[0].data
+
+
+def test_inviting_reaches_the_connection(parts) -> None:
+    connection, _, controller = parts
+
+    controller.invite("#study", ["faiza"])
+
+    assert connection.sent[0].type is MessageType.INVITE
+    assert connection.sent[0].data["members"] == ["faiza"]

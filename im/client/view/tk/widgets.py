@@ -24,8 +24,8 @@ class PillButton(tk.Canvas):
         *,
         fill: str = t.ORANGE,
         text_colour: str = t.WHITE,
-        height: int = 38,
-        radius: int = 19,
+        height: int = t.px(38),
+        radius: int = t.px(19),
         font: tuple = t.BODY_BOLD,
         bg: str = t.RAIL,
     ) -> None:
@@ -63,7 +63,7 @@ class PillButton(tk.Canvas):
 class NavItem(tk.Canvas):
     """One row of the navigation rail: an icon, a label, a selected state."""
 
-    HEIGHT = 42
+    HEIGHT = t.px(42)
 
     def __init__(
         self,
@@ -119,7 +119,7 @@ class NavItem(tk.Canvas):
 class ConversationRow(tk.Canvas):
     """One entry in the conversation list: avatar, name, preview, time, unread."""
 
-    HEIGHT = 66
+    HEIGHT = t.px(66)
 
     def __init__(self, master: tk.Misc, key: str, command: Callable[[str], None]) -> None:
         super().__init__(master, height=self.HEIGHT, bg=t.LIST_BG, highlightthickness=0)
@@ -187,8 +187,8 @@ class Transcript(tk.Canvas):
     class of bug where the drawn state and the model drift apart.
     """
 
-    PAD_X = 18
-    GAP = 10
+    PAD_X = t.px(18)
+    GAP = t.px(10)
 
     def __init__(self, master: tk.Misc) -> None:
         super().__init__(master, bg=t.CREAM, highlightthickness=0)

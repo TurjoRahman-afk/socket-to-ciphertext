@@ -775,3 +775,119 @@ def test_history_carries_the_receipt_state(stored: MessageRouter) -> None:
     history(stored, alice, "bob")
 
     assert alice.last().data["messages"][0]["state"] == "READ"
+
+
+# ---------------------------------------------------- creating with members ---
+
+
+def test_a_room_can_be_created_with_members(router) -> None:
+    """The design document specified CREATE_ROOM as room_name plus members."""
+    faiza = online(router, "faiza")
+    online(router, "aya")
+    online(router, "keisha")
+
+    router.handle(
+        faiza,
+        Frame(type=MessageType.CREATE_ROOM, data={"room": "#study", "members": ["aya", "keisha"]}),
+    )
+
+    assert router.rooms.members("#study") == {"faiza", "aya", "keisha"}
+
+
+def test_unknown_names_are_skipped_rather_than_failing_the_room(router) -> None:
+    """One misspelt name should not cost you the room."""
+    faiza = online(router, "faiza")
+    online(router, "aya")
+
+    router.handle(
+        faiza,
+        Frame(type=MessageType.CREATE_ROOM, data={"room": "#study", "members": ["aya", "nobody"]}),
+    )
+
+    assert router.rooms.members("#study") == {"faiza", "aya"}
+
+
+def test_a_room_may_not_be_added_as_a_member_of_a_room(router) -> None:
+    faiza = online(router, "faiza")
+
+    router.handle(
+        faiza,
+        Frame(type=MessageType.CREATE_ROOM, data={"room": "#study", "members": ["#other"]}),
+    )
+
+    assert router.rooms.members("#study") == {"faiza"}
+
+
+def test_members_that_are_not_a_list_are_ignored(router) -> None:
+    """A malformed frame must not raise on the connection's reader thread."""
+    faiza = online(router, "faiza")
+
+    router.handle(
+        faiza, Frame(type=MessageType.CREATE_ROOM, data={"room": "#study", "members": "aya"})
+    )
+
+    assert router.rooms.members("#study") == {"faiza"}
+
+
+def test_everyone_added_is_told_about_the_room(router) -> None:
+    """A new member who is online learns of the room without having to ask."""
+    faiza = online(router, "faiza")
+    aya = online(router, "aya")
+    quiet(faiza, aya)
+
+    router.handle(
+        faiza, Frame(type=MessageType.CREATE_ROOM, data={"room": "#study", "members": ["aya"]})
+    )
+
+    states = [f for f in aya.outbox if f.type is MessageType.ROOM_STATE]
+    assert states and set(states[-1].data["members"]) == {"faiza", "aya"}
+
+
+# ------------------------------------------------------------------- invite ---
+
+
+def test_a_member_can_invite_somebody_else(router) -> None:
+    faiza = online(router, "faiza")
+    online(router, "aya")
+    router.handle(faiza, Frame(type=MessageType.CREATE_ROOM, data={"room": "#study"}))
+
+    router.handle(
+        faiza, Frame(type=MessageType.INVITE, data={"room": "#study", "members": ["aya"]})
+    )
+
+    assert router.rooms.members("#study") == {"faiza", "aya"}
+
+
+def test_a_stranger_cannot_invite_anyone(router) -> None:
+    """Otherwise guessing a room name would be enough to add yourself to it."""
+    faiza = online(router, "faiza")
+    aya = online(router, "aya")
+    router.handle(faiza, Frame(type=MessageType.CREATE_ROOM, data={"room": "#study"}))
+    quiet(faiza, aya)
+
+    router.handle(aya, Frame(type=MessageType.INVITE, data={"room": "#study", "members": ["aya"]}))
+
+    assert router.rooms.members("#study") == {"faiza"}
+    assert aya.last().data["code"] == "NOT_A_MEMBER"
+
+
+def test_inviting_into_a_room_that_does_not_exist_is_an_error(router) -> None:
+    faiza = online(router, "faiza")
+
+    router.handle(
+        faiza, Frame(type=MessageType.INVITE, data={"room": "#nowhere", "members": ["aya"]})
+    )
+
+    assert faiza.last().data["code"] == "NO_SUCH_ROOM"
+
+
+def test_inviting_only_unknown_names_says_so(router) -> None:
+    faiza = online(router, "faiza")
+    router.handle(faiza, Frame(type=MessageType.CREATE_ROOM, data={"room": "#study"}))
+    quiet(faiza)
+
+    router.handle(
+        faiza, Frame(type=MessageType.INVITE, data={"room": "#study", "members": ["ghost"]})
+    )
+
+    assert faiza.last().data["code"] == "NO_SUCH_USER"

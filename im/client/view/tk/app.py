@@ -51,6 +51,7 @@ from im.client.model.events import (
     UnreadChanged,
 )
 from im.client.view.tk import theme as t
+from im.client.view.tk.room_dialog import ask_room
 from im.client.view.tk.widgets import ConversationRow, NavItem, PillButton, Transcript
 from im.common.frames import Frame
 
@@ -61,8 +62,8 @@ POLL_MS = 50
 #: How long after the last keystroke we tell the other end we stopped typing.
 TYPING_IDLE_MS = 1500
 
-RAIL_WIDTH = 190
-LIST_WIDTH = 260
+RAIL_WIDTH = t.px(190)
+LIST_WIDTH = t.px(280)
 
 
 class TkView:
@@ -82,8 +83,8 @@ class TkView:
         # the Tcl interpreter.
         self.root = root if root is not None else tk.Tk()
         self.root.title("Semaphore")
-        self.root.geometry("1040x660")
-        self.root.minsize(840, 520)
+        self.root.geometry(f"{t.px(1060)}x{t.px(680)}")
+        self.root.minsize(t.px(840), t.px(520))
         self.root.configure(bg=t.PAGE)
 
         self._build()
@@ -115,7 +116,7 @@ class TkView:
         rail.grid_propagate(False)
         rail.columnconfigure(0, weight=1)
 
-        logo = tk.Canvas(rail, height=64, bg=t.RAIL, highlightthickness=0)
+        logo = tk.Canvas(rail, height=t.px(64), bg=t.RAIL, highlightthickness=0)
         logo.pack(fill="x", padx=16, pady=(16, 8))
         logo.bind("<Configure>", lambda _e: self._draw_logo(logo))
 
@@ -135,7 +136,7 @@ class TkView:
             self.nav[key] = item
         self.nav["chats"].set_selected(True)
 
-        self.me = tk.Canvas(rail, height=58, bg=t.RAIL, highlightthickness=0)
+        self.me = tk.Canvas(rail, height=t.px(58), bg=t.RAIL, highlightthickness=0)
         self.me.pack(side="bottom", fill="x", padx=8, pady=10)
         self.me.bind("<Configure>", lambda _e: self._draw_me())
 
@@ -168,7 +169,7 @@ class TkView:
         panel.rowconfigure(1, weight=1)
         panel.columnconfigure(0, weight=1)
 
-        head = tk.Frame(panel, bg=t.LIST_BG, height=54)
+        head = tk.Frame(panel, bg=t.LIST_BG, height=t.px(54))
         head.grid(row=0, column=0, sticky="ew")
         head.grid_propagate(False)
         tk.Label(
@@ -194,7 +195,7 @@ class TkView:
         pane.rowconfigure(1, weight=1)
         pane.columnconfigure(0, weight=1)
 
-        self.header = tk.Canvas(pane, height=64, bg=t.WHITE, highlightthickness=0)
+        self.header = tk.Canvas(pane, height=t.px(64), bg=t.WHITE, highlightthickness=0)
         self.header.grid(row=0, column=0, sticky="ew")
         self.header.bind("<Configure>", lambda _e: self._draw_header())
 
@@ -232,18 +233,18 @@ class TkView:
         active = self.model.active
         if active is None:
             self.header.create_text(
-                24, h / 2, text="Select a conversation", anchor="w",
+                t.px(24), h / 2, text="Select a conversation", anchor="w",
                 fill=t.MUTED, font=t.BODY,
             )
             return
 
         room = active.startswith("#")
         t.draw_avatar(
-            self.header, 36, h / 2, active, radius=19,
+            self.header, t.px(36), h / 2, active, radius=t.px(19),
             status=None if room else (t.ONLINE if self.model.is_online(active) else t.OFFLINE),
         )
         self.header.create_text(
-            66, h / 2 - 9, text=active, anchor="w", fill=t.BROWN, font=t.H2
+            t.px(66), h / 2 - t.px(9), text=active, anchor="w", fill=t.BROWN, font=t.H2
         )
 
         typing = self.model.typing_in(active)
@@ -255,12 +256,20 @@ class TkView:
         else:
             subtitle = "Online" if self.model.is_online(active) else "Offline"
             colour = t.ONLINE if self.model.is_online(active) else t.MUTED
-        self.header.create_text(66, h / 2 + 10, text=subtitle, anchor="w", fill=colour, font=t.TINY)
+        self.header.create_text(
+            t.px(66), h / 2 + t.px(10), text=subtitle, anchor="w", fill=colour, font=t.TINY
+        )
 
-        for i, icon in enumerate(("⋯", "☎", "🎥")):
-            self.header.create_text(
-                w - 24 - i * 34, h / 2, text=icon, fill=t.MUTED, font=(t.FONT, 12)
+        # A room gets one more icon than a direct message: somebody has to be
+        # able to add the fifth person after the room already exists.
+        icons = ("👤+", "⋯", "☎", "🎥") if room else ("⋯", "☎", "🎥")
+        for i, icon in enumerate(icons):
+            item = self.header.create_text(
+                w - t.px(24) - i * t.px(34), h / 2, text=icon,
+                fill=t.ORANGE_DEEP if icon == "👤+" else t.MUTED, font=t.font(12),
             )
+            if icon == "👤+":
+                self.header.tag_bind(item, "<Button-1>", lambda _e: self._invite_menu())
 
     # -------------------------------------------------------------- the loop ---
 
@@ -327,20 +336,65 @@ class TkView:
             self.controller.select(who.strip())
 
     def _room_menu(self) -> None:
-        room = simpledialog.askstring(
-            "Rooms", "Room name (it will be created if it does not exist):", parent=self.root
+        """Make a room, with whoever should be in it.
+
+        The name decides which of the two things this does. A room we are
+        already in is an invitation; anything else is a new room. Asking the
+        user to say which they meant would be a question they should not have
+        to answer, because the answer is already on screen.
+        """
+        answer = ask_room(
+            self.root,
+            self._contacts(),
+            online=self.model.is_online,
         )
-        if not room or not room.strip():
+        if answer is None:
             return
-        name = self._hashed(room)
-        # Join first; the server answers NO_SUCH_ROOM if it is new, and the
-        # error handler offers to create it. Asking the user which of the two
-        # they meant would be a question they should not have to answer.
+
+        name = self._hashed(answer[0])
+        members = answer[1]
+
         if name in self.model.rooms:
             self.controller.join(name)
+            if members:
+                self.controller.invite(name, members)
         else:
-            self.controller.create_room(name)
+            self.controller.create_room(name, members)
         self.controller.select(name)
+
+    def _invite_menu(self) -> None:
+        """Add people to the room on screen."""
+        room = self.model.active
+        if room is None or not room.startswith("#"):
+            messagebox.showinfo(
+                "Add people",
+                "Open a room first. People are added to rooms, not to direct messages.",
+                parent=self.root,
+            )
+            return
+
+        already = set(self.model.room_members(room))
+        answer = ask_room(
+            self.root,
+            self._contacts(),
+            title=f"Add people to {room}",
+            room=room,
+            online=self.model.is_online,
+            already_in=already,
+        )
+        if answer is not None and answer[1]:
+            self.controller.invite(room, answer[1])
+
+    def _contacts(self) -> list[str]:
+        """Everyone we know of, online first.
+
+        The roster holds people who have been seen this session, whether or
+        not they are still connected -- someone who went offline a minute ago
+        is still a reasonable person to put in a room.
+        """
+        me = self.model.username
+        names = [name for name in self.model.roster if name != me]
+        return sorted(names, key=lambda name: (not self.model.is_online(name), name.lower()))
 
     @staticmethod
     def _hashed(room: str) -> str:

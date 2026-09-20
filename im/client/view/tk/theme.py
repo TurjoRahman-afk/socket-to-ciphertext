@@ -7,7 +7,63 @@ drawn on a Canvas here rather than faked with a widget.
 
 from __future__ import annotations
 
+import ctypes
+import sys
 import tkinter as tk
+
+#: How much bigger than 96 DPI this display is. Set by enable_crisp_rendering.
+SCALE = 1.0
+
+
+def enable_crisp_rendering() -> float:
+    """Tell Windows this process handles its own scaling, and return the factor.
+
+    This is the single biggest thing that makes a Tk window look bad on a
+    modern display, and it is not a drawing problem. A process that does not
+    declare DPI awareness is rendered by Windows at 96 DPI and then
+    *bitmap-stretched* to the display's real scaling -- so at 125% every line
+    and glyph is resampled, which is exactly what "pixelated" looks like.
+
+    Declaring awareness means Windows hands us the real pixel grid and stops
+    stretching. Everything then has to be sized in those real pixels, which
+    is what SCALE is for.
+
+    Must be called before the first Tk() -- awareness cannot be changed once
+    a window exists.
+    """
+    global SCALE
+    if not sys.platform.startswith("win"):
+        return SCALE
+
+    try:
+        # 2 is per-monitor v1: correct when a window moves between screens
+        # with different scaling, which a laptop plus an external display
+        # does constantly.
+        ctypes.windll.shcore.SetProcessDpiAwareness(2)
+    except (AttributeError, OSError):
+        try:
+            ctypes.windll.user32.SetProcessDPIAware()  # older Windows
+        except (AttributeError, OSError):
+            return SCALE
+
+    try:
+        dpi = ctypes.windll.user32.GetDpiForSystem()
+        SCALE = max(1.0, dpi / 96.0)
+    except (AttributeError, OSError):
+        pass
+    return SCALE
+
+
+def px(value: float) -> int:
+    """A length in real device pixels."""
+    return int(round(value * SCALE))
+
+
+# Run on import, deliberately. Awareness cannot be changed once a Tk window
+# exists, and the type scale below is computed from SCALE -- so this has to
+# happen before either. Importing this module is the only moment guaranteed
+# to be before both. It does nothing at all off Windows.
+enable_crisp_rendering()
 
 # ------------------------------------------------------------------ colour ---
 # Straight from the mockup's palette swatches.
@@ -36,13 +92,27 @@ AVATAR_COLOURS = ("#FF8347", "#F7A072", "#E8A87C", "#C38D9E", "#7FB685", "#6C9BC
 
 # -------------------------------------------------------------------- type ---
 FONT = "Segoe UI"
-H1 = (FONT, 20, "bold")
-H2 = (FONT, 13, "bold")
-BODY = (FONT, 10)
-BODY_BOLD = (FONT, 10, "bold")
-SMALL = (FONT, 9)
-TINY = (FONT, 8)
-BADGE = (FONT, 8, "bold")
+
+
+def font(size: int, weight: str = "normal") -> tuple:
+    """A font in device pixels.
+
+    A negative size means pixels to Tk, positive means points. Pixels are used
+    here because every coordinate in this interface is in pixels too, and
+    mixing the two makes the type drift out of step with the layout as soon as
+    the display scaling is not 100%.
+    """
+    return (FONT, -px(size), weight)
+
+
+H1 = font(20, "bold")
+H2 = font(13, "bold")
+BODY = font(11)
+BODY_BOLD = font(11, "bold")
+SMALL = font(10)
+TINY = font(9)
+BADGE = font(9, "bold")
+
 
 
 def avatar_colour(name: str) -> str:

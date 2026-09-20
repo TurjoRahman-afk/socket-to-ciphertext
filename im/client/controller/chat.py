@@ -130,8 +130,11 @@ class ChatController:
         self.connection.history(target, limit=limit)
         return True
 
-    def create_room(self, room: str) -> None:
-        self.connection.create_room(room)
+    def create_room(self, room: str, members: list[str] | None = None) -> None:
+        self.connection.create_room(room, members)
+
+    def invite(self, room: str, members: list[str]) -> None:
+        self.connection.invite(room, members)
 
     def join(self, room: str) -> None:
         self.connection.join(room)

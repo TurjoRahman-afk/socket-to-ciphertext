@@ -73,6 +73,8 @@ class MessageRouter:
             self._join(session, frame)
         elif frame.type is MessageType.LEAVE:
             self._leave(session, frame)
+        elif frame.type is MessageType.INVITE:
+            self._invite(session, frame)
         elif frame.type is MessageType.TYPING:
             self._typing(session, frame)
         elif frame.type is MessageType.RECEIPT:
@@ -204,7 +206,53 @@ class MessageRouter:
         # would be a strange thing to want.
         self.rooms.join(room, session.username)
         log.info("%s created %s", session.username, room)
+
+        # Members may be named at creation. Version 1 of the design document
+        # specified this and an earlier revision dropped it, which left no way
+        # to start a room with anybody in it -- everyone had to be told the
+        # name out of band and join themselves.
+        self._add_members(room, frame.data.get("members"))
         self._broadcast_room_state(room)
+
+    def _invite(self, session: Session, frame: Frame) -> None:
+        """Add people to a room that already exists.
+
+        Only a member may invite. Otherwise anybody who guessed a room name
+        could add themselves to it, or quietly add somebody else.
+        """
+        room = self._room_name(session, frame)
+        if room is None:
+            return
+        if not self.rooms.exists(room):
+            session.send(error("NO_SUCH_ROOM", f"{room} does not exist"))
+            return
+        if session.username not in self.rooms.members(room):
+            session.send(error("NOT_A_MEMBER", f"join {room} before inviting anyone to it"))
+            return
+
+        added = self._add_members(room, frame.data.get("members"))
+        if not added:
+            session.send(error("NO_SUCH_USER", "none of those names have an account"))
+            return
+        self._broadcast_room_state(room)
+
+    def _add_members(self, room: str, members: object) -> list[str]:
+        """Join everyone named who actually has an account.
+
+        Unknown names are skipped rather than refused. A room half-created
+        because one name was misspelt would be worse than a room with one
+        person missing, and the member list that comes back says plainly who
+        made it in.
+        """
+        if not isinstance(members, list):
+            return []
+        added = []
+        for name in members[:64]:
+            name = str(name)
+            if name and not name.startswith(ROOM_PREFIX) and self.users.exists(name):
+                self.rooms.join(room, name)
+                added.append(name)
+        return added
 
     def _join(self, session: Session, frame: Frame) -> None:
         room = self._room_name(session, frame)

@@ -47,7 +47,9 @@ because the server has to route what it cannot read.
 | `LOGIN` | user, pass_hash | `LOGIN_OK` + roster + rooms |
 | `GET_KEY` | user | `KEY` (their public key) |
 | `MSG` | to, body, nonce | `ACK`, then fan-out |
-| `CREATE_ROOM` / `JOIN` / `LEAVE` | room | `ROOM_STATE` |
+| `CREATE_ROOM` | room, members (optional) | `ROOM_STATE` |
+| `JOIN` / `LEAVE` | room | `ROOM_STATE` |
+| `INVITE` | room, members | `ROOM_STATE` |
 | `TYPING` | to, on / off | relayed only |
 | `RECEIPT` | to, ref, state | relayed to the sender |
 | `HISTORY` | room, before, limit | `HISTORY_RESULT` |
@@ -124,12 +126,31 @@ A `RECEIPT` frame carries `ref`, the id of the message it concerns, and
   mean forty receipts, and the protocol has nowhere to record twenty separate
   per-member states.
 
+## Rooms and membership
+
+`CREATE_ROOM` may name the members it should start with, which is what the
+milestone 1 design specified. Without it, a room can only be filled by telling
+each person its name out of band and having them `JOIN` -- which is a worse
+protocol and a much worse interface.
+
+A name that has no account is skipped rather than refused. Losing a whole room
+to one misspelt name would be worse than a room with one person missing, and
+the `ROOM_STATE` that comes back says plainly who made it in. At most 64 names
+are read from one frame.
+
+`INVITE` does the same thing to a room that already exists, and only a member
+may send it. Otherwise guessing a room name would be enough to add yourself to
+it, or to quietly add somebody else. Everyone added is sent `ROOM_STATE`, so a
+new member learns of the room without having to ask for it.
+
 ## Additional error codes
 
 | Code | Meaning |
 |------|---------|
 | `NO_KEY` | No public key is published for that user, or no such user. |
-| `NOT_A_MEMBER` | Sending to, reading the history of, or leaving a room you are not in. |
+| `NOT_A_MEMBER` | Sending to, reading the history of, leaving, or inviting into a room you are not in. |
 | `ROOM_EXISTS` | `CREATE_ROOM` for a room that already exists. |
 | `BAD_ROOM` | A room name missing its `#`, empty, over 32 characters, or containing whitespace. |
 | `BAD_RECEIPT` | A `RECEIPT` without a `ref`, or with a state other than `DELIVERED` or `READ`. |
+| `NO_SUCH_ROOM` | `INVITE` naming a room that does not exist. |
+| `NO_SUCH_USER` | `INVITE` where not one of the names has an account. |

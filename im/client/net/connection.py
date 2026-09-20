@@ -309,8 +309,17 @@ class ServerConnection:
             data["before"] = before
         self.send(Frame(type=MessageType.HISTORY, to=room, data=data))
 
-    def create_room(self, room: str) -> None:
-        self.send(Frame(type=MessageType.CREATE_ROOM, data={"room": room}))
+    def create_room(self, room: str, members: list[str] | None = None) -> None:
+        data: dict = {"room": room}
+        if members:
+            data["members"] = list(members)
+        self.send(Frame(type=MessageType.CREATE_ROOM, data=data))
+
+    def invite(self, room: str, members: list[str]) -> None:
+        """Add people to a room that already exists."""
+        self.send(
+            Frame(type=MessageType.INVITE, data={"room": room, "members": list(members)})
+        )
 
     def join(self, room: str) -> None:
         self.send(Frame(type=MessageType.JOIN, data={"room": room}))
