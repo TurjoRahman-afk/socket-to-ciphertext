@@ -269,16 +269,15 @@ class TkView:
             t.px(66), h / 2 + t.px(10), text=subtitle, anchor="w", fill=colour, font=t.TINY
         )
 
-        # A room gets one more icon than a direct message: somebody has to be
-        # able to add the fifth person after the room already exists.
-        icons = ("👤+", "⋯", "☎", "🎥") if room else ("⋯", "☎", "🎥")
-        for i, icon in enumerate(icons):
+        # Only the one icon, and only on a room. The mockup also showed a call
+        # button, a video button and an overflow menu; none of them has
+        # anything behind it, and an icon that does nothing when clicked is
+        # worse than an icon that is not there.
+        if room:
             item = self.header.create_text(
-                w - t.px(24) - i * t.px(34), h / 2, text=icon,
-                fill=t.ORANGE_DEEP if icon == "👤+" else t.MUTED, font=t.font(12),
+                w - t.px(24), h / 2, text="👤+", fill=t.ORANGE_DEEP, font=t.font(12)
             )
-            if icon == "👤+":
-                self.header.tag_bind(item, "<Button-1>", lambda _e: self._invite_menu())
+            self.header.tag_bind(item, "<Button-1>", lambda _e: self._invite_menu())
 
     # -------------------------------------------------------------- the loop ---
 
