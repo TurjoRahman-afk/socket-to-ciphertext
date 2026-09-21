@@ -123,7 +123,14 @@ class TkView:
     def _build_rail(self) -> None:
         rail = tk.Frame(self.root, bg=t.RAIL, width=RAIL_WIDTH)
         rail.grid(row=0, column=0, sticky="nsew")
-        rail.grid_propagate(False)
+        # pack_propagate, not grid_propagate: everything in the rail is
+        # packed, and grid_propagate governs grid children only. With the
+        # wrong one the rail widened to fit its widest child -- an
+        # unconfigured Canvas, which Tk makes 378 pixels -- so the rail came
+        # out at 598 instead of the 285 it asks for. The conversation list
+        # next door uses grid children, which is why its width was always
+        # exactly right and this one never was.
+        rail.pack_propagate(False)
         rail.columnconfigure(0, weight=1)
 
         logo = tk.Canvas(rail, height=t.px(64), bg=t.RAIL, highlightthickness=0)
@@ -203,32 +210,44 @@ class TkView:
     def _build_chat(self) -> None:
         pane = tk.Frame(self.root, bg=t.CREAM)
         pane.grid(row=0, column=2, sticky="nsew")
-        pane.rowconfigure(1, weight=1)
+        pane.rowconfigure(2, weight=1)
         pane.columnconfigure(0, weight=1)
 
         self.header = tk.Canvas(pane, height=t.px(64), bg=t.WHITE, highlightthickness=0)
         self.header.grid(row=0, column=0, sticky="ew")
         self.header.bind("<Configure>", lambda _e: self._draw_header())
 
+        # A coloured strip across the whole pane when the connection is not
+        # healthy. RETRYING used to be five grey words at the bottom of the
+        # rail, which is easy to miss entirely -- and not knowing you are
+        # disconnected is the worst state a messenger can put you in. It
+        # occupies no height at all when everything is fine.
+        self.status_strip = tk.Canvas(pane, height=0, bg=t.ORANGE_DEEP, highlightthickness=0)
+        self.status_strip.grid(row=1, column=0, sticky="ew")
+        self.status_strip.bind("<Configure>", lambda _e: self._draw_strip())
+        self.status_strip.grid_remove()
+        self._strip_text = ""
+
         self.transcript = Transcript(pane)
-        self.transcript.grid(row=1, column=0, sticky="nsew")
+        self.transcript.grid(row=2, column=0, sticky="nsew")
 
         composer = tk.Frame(pane, bg=t.CREAM)
-        composer.grid(row=2, column=0, sticky="ew", padx=16, pady=14)
+        composer.grid(row=3, column=0, sticky="ew", padx=t.px(16), pady=t.px(14))
         composer.columnconfigure(0, weight=1)
 
         box = tk.Frame(composer, bg=t.WHITE, highlightthickness=1, highlightbackground=t.HAIRLINE)
-        box.grid(row=0, column=0, sticky="ew", ipady=7)
+        box.grid(row=0, column=0, sticky="ew", ipady=t.px(7))
         self.entry = tk.Entry(
             box, font=t.BODY, relief="flat", bg=t.WHITE, fg=t.BROWN,
             insertbackground=t.ORANGE_DEEP,
         )
-        self.entry.pack(fill="x", padx=14)
+        self.entry.pack(fill="x", padx=t.px(14))
         self.entry.bind("<Return>", self._on_send)
         self.entry.bind("<Key>", self._on_key)
 
         self.send_button = PillButton(
-            composer, "➤", self._on_send, height=42, radius=21, font=(t.FONT, 13), bg=t.CREAM
+            composer, "➤", self._on_send, height=t.px(42), radius=t.px(21),
+            font=t.font(13), bg=t.CREAM,
         )
         self.send_button.configure(width=52)
         self.send_button.grid(row=0, column=1, padx=(10, 0))
@@ -580,6 +599,7 @@ class TkView:
             self._draw_header()
         elif isinstance(event, ConnectionStateChanged):
             self._set_composer(enabled=event.state == "ONLINE")
+            self._show_state(str(event.state))
             self._draw_me()
         elif isinstance(event, ContactsChanged):
             self._refresh_list()
@@ -616,6 +636,41 @@ class TkView:
         """The composer is enabled in exactly one connection state."""
         self.entry.config(state="normal" if enabled else "disabled")
         self.send_button.set_enabled(enabled)
+
+    #: What to say for each unhealthy state, and in what colour. ONLINE is
+    #: absent on purpose: a healthy connection says nothing at all.
+    STRIP = {
+        "CONNECTING": ("Connecting\u2026", "#C9A227"),
+        "AUTHENTICATING": ("Signing in\u2026", "#C9A227"),
+        "RETRYING": ("Reconnecting\u2026 messages you send now will wait", "#C9622D"),
+        "CLOSED": ("Disconnected. Nothing will be sent or received.", "#B4452B"),
+        "DISCONNECTED": ("Not connected.", "#B4452B"),
+    }
+
+    def _show_state(self, state: str) -> None:
+        """Raise or hide the strip for a connection state."""
+        entry = self.STRIP.get(state.upper())
+        if entry is None:
+            # Removed from the grid rather than given height 0: Tk will not
+            # make a Canvas shorter than one pixel, and one pixel of orange
+            # under the header is a line nobody asked for.
+            self._strip_text = ""
+            self.status_strip.grid_remove()
+            return
+        self._strip_text, colour = entry
+        self.status_strip.configure(height=t.px(26), bg=colour)
+        self.status_strip.grid()
+        self._draw_strip()
+
+    def _draw_strip(self) -> None:
+        self.status_strip.delete("all")
+        w = self.status_strip.winfo_width()
+        if w < 2 or not self._strip_text:
+            return
+        self.status_strip.create_text(
+            w / 2, self.status_strip.winfo_height() / 2, text=self._strip_text,
+            fill=t.WHITE, font=t.SMALL,
+        )
 
     def _refresh_list(self) -> None:
         keys = self.model.keys()

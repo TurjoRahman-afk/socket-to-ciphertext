@@ -15,6 +15,7 @@ not a correctness one -- but the two things that would break silently:
 from __future__ import annotations
 
 import threading
+import time
 
 import pytest
 
@@ -353,3 +354,115 @@ def test_the_search_window_lists_hits_and_opens_one(view) -> None:
     listbox = [w for w in windows[0].winfo_children() if isinstance(w, tk.Listbox)][0]
     assert "Friday" in listbox.get(0)
     windows[0].destroy()
+
+
+# ------------------------------------------------------------- the restyle ---
+
+
+def test_the_backdrop_is_generated_and_cached(tk_root) -> None:
+    """Rendering costs about a third of a second, so asking twice for the
+    same size must not pay twice."""
+    from im.client.view.tk import backdrop as bd
+
+    bd._cache.clear()
+    first = bd.backdrop(400, 300)
+    second = bd.backdrop(400, 300)
+
+    assert first is not None
+    assert first is second, "the second call should come from the cache"
+    assert first.width() >= 400 and first.height() >= 300
+
+
+def test_nearby_sizes_share_one_backdrop(tk_root) -> None:
+    """A window dragged a few pixels should not throw away a good image."""
+    from im.client.view.tk import backdrop as bd
+
+    bd._cache.clear()
+    a = bd.backdrop(400, 300)
+    b = bd.backdrop(408, 306)
+
+    assert a is b
+
+
+def test_no_backdrop_before_the_canvas_has_been_laid_out(tk_root) -> None:
+    """A canvas reports a size of 1 until Tk has placed it."""
+    from im.client.view.tk import backdrop as bd
+
+    assert bd.backdrop(1, 1) is None
+
+
+def test_the_backdrop_cache_does_not_grow_without_limit(tk_root) -> None:
+    """Dragging a window across every width would otherwise hold all of them."""
+    from im.client.view.tk import backdrop as bd
+
+    bd._cache.clear()
+    for width in range(200, 640, 40):
+        bd.backdrop(width, 200)
+
+    assert len(bd._cache) <= 7
+
+
+def test_messages_from_different_days_get_separators(view) -> None:
+    from im.client.model.conversation import Message
+
+    day = 86_400_000
+    now = int(time.time() * 1000)
+    for ts in (now - day, now):
+        view.model.add_message(
+            "aya", Message(id=str(ts), sender="aya", body="hello", ts=ts, mine=False)
+        )
+    view.model.select("aya")
+    view.root.geometry("900x600")
+    view.root.update()
+    view._redraw()
+
+    drawn = view.transcript.as_text()
+    assert "Today" in drawn
+    assert "Yesterday" in drawn
+
+
+def test_one_separator_per_day_not_per_message(view) -> None:
+    from im.client.model.conversation import Message
+
+    now = int(time.time() * 1000)
+    for i in range(4):
+        view.model.add_message(
+            "aya", Message(id=str(i), sender="aya", body="hi", ts=now - i * 1000, mine=False)
+        )
+    view.model.select("aya")
+    view.root.geometry("900x600")
+    view.root.update()
+    view._redraw()
+
+    assert view.transcript.as_text().count("Today") == 1
+
+
+def test_a_message_with_no_timestamp_gets_no_separator(view) -> None:
+    from im.client.model.conversation import Message
+
+    view.model.add_message(
+        "aya", Message(id="1", sender="aya", body="hi", ts=0, mine=False)
+    )
+    view.model.select("aya")
+    view.root.geometry("900x600")
+    view.root.update()
+    view._redraw()
+
+    assert "Today" not in view.transcript.as_text()
+
+
+def test_the_connection_strip_appears_only_when_something_is_wrong(view) -> None:
+    """ONLINE says nothing at all. RETRYING used to be five grey words at the
+    bottom of the rail, which is easy to miss."""
+    view._show_state("RETRYING")
+    assert view.status_strip.winfo_manager(), "the strip should be on the grid"
+    assert "Reconnecting" in view._strip_text
+
+    view._show_state("ONLINE")
+    assert view._strip_text == ""
+
+
+def test_every_unhealthy_state_has_something_to_say(view) -> None:
+    for state in ("CONNECTING", "AUTHENTICATING", "RETRYING", "CLOSED", "DISCONNECTED"):
+        view._show_state(state)
+        assert view._strip_text, f"{state} should raise the strip"

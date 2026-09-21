@@ -11,6 +11,7 @@ import tkinter as tk
 from collections.abc import Callable
 
 from im.client.view.tk import theme as t
+from im.client.view.tk.backdrop import backdrop
 
 
 class PillButton(tk.Canvas):
@@ -154,29 +155,42 @@ class ConversationRow(tk.Canvas):
         if w < 2:
             return
 
+        pad = t.px(5)
         if self._selected:
-            t.rounded_rect(self, 5, 3, w - 5, h - 3, 12, fill=t.SELECTED, outline="")
+            t.rounded_rect(self, pad, t.px(3), w - pad, h - t.px(3), t.px(12),
+                           fill=t.SELECTED, outline="")
+            # A bar down the left edge as well as the fill. On a warm palette
+            # two shades of the same cream are easy to miss; an edge is not.
+            t.rounded_rect(self, pad, t.px(12), pad + t.px(4), h - t.px(12), t.px(2),
+                           fill=t.ORANGE_DEEP, outline="")
         elif hover:
-            t.rounded_rect(self, 5, 3, w - 5, h - 3, 12, fill=t.HOVER, outline="")
+            t.rounded_rect(self, pad, t.px(3), w - pad, h - t.px(3), t.px(12),
+                           fill=t.HOVER, outline="")
 
-        t.draw_avatar(self, 32, h / 2, self.key, radius=19, status=self._status)
+        t.draw_avatar(self, t.px(32), h / 2, self.key, radius=t.px(19), status=self._status)
 
-        name = self.key
-        self.create_text(60, 24, text=name, anchor="w", fill=t.BROWN, font=t.BODY_BOLD)
+        left = t.px(60)
+        self.create_text(left, t.px(24), text=self.key, anchor="w",
+                         fill=t.BROWN, font=t.BODY_BOLD)
 
         preview = self._preview
-        room = max(6, int((w - 130) / 6.4))
+        room = max(6, int((w - t.px(130)) / t.px(6.4)))
         if len(preview) > room:
             preview = preview[: room - 1] + "…"
-        self.create_text(60, 44, text=preview, anchor="w", fill=t.MUTED, font=t.SMALL)
+        self.create_text(left, t.px(44), text=preview, anchor="w", fill=t.MUTED, font=t.SMALL)
 
         if self._time:
-            self.create_text(w - 16, 22, text=self._time, anchor="e", fill=t.MUTED, font=t.TINY)
+            self.create_text(w - t.px(16), t.px(22), text=self._time, anchor="e",
+                             fill=t.MUTED, font=t.TINY)
         if self._unread:
-            t.circle(self, w - 26, 45, 9, fill=t.ORANGE, outline="")
-            self.create_text(
-                w - 26, 45, text=str(min(self._unread, 99)), fill=t.WHITE, font=t.BADGE
-            )
+            # A pill, not a circle: "12" in a circle sized for "1" overflows
+            # it, and 99+ overflows it badly.
+            label = "99+" if self._unread > 99 else str(self._unread)
+            half = t.px(9) + t.px(4) * (len(label) - 1)
+            cx, cy = w - t.px(26), t.px(45)
+            t.rounded_rect(self, cx - half, cy - t.px(9), cx + half, cy + t.px(9), t.px(9),
+                           fill=t.ORANGE, outline="")
+            self.create_text(cx, cy, text=label, fill=t.WHITE, font=t.BADGE)
 
 
 class Transcript(tk.Canvas):
@@ -185,18 +199,44 @@ class Transcript(tk.Canvas):
     Redraws the whole conversation on any change. That is wasteful for a very
     long history and entirely fine for a chat window, and it removes a whole
     class of bug where the drawn state and the model drift apart.
+
+    The soft background is a generated bitmap rather than drawn shapes --
+    backdrop.py explains why it has to be.
     """
 
     PAD_X = t.px(18)
     GAP = t.px(10)
+    AVATAR = t.px(13)
+    TAIL = t.px(7)
 
     def __init__(self, master: tk.Misc) -> None:
         super().__init__(master, bg=t.CREAM, highlightthickness=0)
         self._messages: list = []
         self._empty_text = ""
         self._notices: list[str] = []
-        self.bind("<Configure>", lambda _e: self.redraw())
+        # Held deliberately: Tk keeps only a weak reference to a PhotoImage,
+        # so a background nothing else refers to is collected and the canvas
+        # draws a blank rectangle where it used to be.
+        self._backdrop: tk.PhotoImage | None = None
+        self._resize_after: str | None = None
+        self.bind("<Configure>", self._on_resize)
         self.bind("<MouseWheel>", self._scroll)
+
+    def _on_resize(self, _event: object = None) -> None:
+        """Redraw now; regenerate the background once the dragging stops.
+
+        Rendering the backdrop takes about a third of a second, which is
+        unnoticeable once and unusable on every pixel of a window drag.
+        """
+        self.redraw()
+        if self._resize_after is not None:
+            self.after_cancel(self._resize_after)
+        self._resize_after = self.after(150, self._refresh_backdrop)
+
+    def _refresh_backdrop(self) -> None:
+        self._resize_after = None
+        self._backdrop = backdrop(self.winfo_width(), self.winfo_height())
+        self.redraw()
 
     def _scroll(self, event: tk.Event) -> None:
         self.yview_scroll(int(-event.delta / 60), "units")
@@ -218,87 +258,189 @@ class Transcript(tk.Canvas):
         if width < 40:
             return
 
+        self._draw_backdrop(width)
+
         if not self._messages and not self._notices:
             self._draw_empty(width)
             return
 
-        y = 16
-        max_bubble = max(160, int(width * 0.62))
+        y = t.px(16)
+        max_bubble = max(t.px(160), int(width * 0.62))
+        last_day = ""
 
         for message in self._messages:
+            day = self._day(message.ts)
+            if day and day != last_day:
+                y = self._draw_day(day, y, width)
+                last_day = day
             y = self._draw_bubble(message, y, width, max_bubble)
+
         for text in self._notices:
             self.create_text(
-                width / 2, y + 10, text=text, fill=t.MUTED, font=t.TINY, anchor="n"
+                width / 2, y + t.px(10), text=text, fill=t.MUTED, font=t.TINY, anchor="n"
             )
-            y += 28
+            y += t.px(28)
 
-        self.configure(scrollregion=(0, 0, width, y + 16))
+        self.configure(scrollregion=(0, 0, width, y + t.px(16)))
         self.yview_moveto(1.0)
+
+    def _draw_backdrop(self, width: int) -> None:
+        """The generated wash, placed once at the top.
+
+        Not tiled. The first attempt repeated the image down the scroll
+        region, and the seam was obvious: the gradient ends dark and restarts
+        light, so every tile boundary was a visible horizontal band.
+
+        Placed once instead, and the canvas background is the colour the
+        gradient ends on -- so a conversation long enough to scroll past the
+        image runs into the same colour it was already approaching, and there
+        is no boundary to see.
+        """
+        if self._backdrop is None:
+            self._backdrop = backdrop(width, self.winfo_height())
+        if self._backdrop is not None:
+            self.create_image(0, 0, image=self._backdrop, anchor="nw")
+
+    def _draw_day(self, day: str, y: float, width: int) -> float:
+        """A dated divider, so a long history is not one undifferentiated wall."""
+        centre = y + t.px(12)
+        label = self.create_text(
+            width / 2, centre, text=day, fill=t.MUTED, font=t.TINY, anchor="c"
+        )
+        x1, _, x2, _ = self.bbox(label)
+        rule = t.px(40)
+        pad = t.px(14)
+        for a, b in ((x1 - pad - rule, x1 - pad), (x2 + pad, x2 + pad + rule)):
+            self.create_line(a, centre, b, centre, fill=t.HAIRLINE)
+        return y + t.px(34)
 
     def _draw_bubble(self, message, y: float, width: int, max_bubble: int) -> float:
         mine = message.mine
         fill = t.ORANGE if mine else t.WHITE
         ink = t.WHITE if mine else t.BROWN
 
+        stamp = self._clock(message.ts)
+        tick = ""
+        if mine:
+            # One tick sent, two delivered, two in colour read -- the
+            # convention every messenger uses, so it needs no explaining.
+            tick = {"SENT": "✓", "DELIVERED": "✓✓", "READ": "✓✓"}.get(
+                message.state, ""
+            )
+        meta = f"{stamp}  {tick}".strip()
+
         # Measure by drawing the text off-screen first, then wrap the bubble
         # around whatever height it actually took.
         probe = self.create_text(
-            -9999, -9999, text=message.body, font=t.BODY, width=max_bubble - 28, anchor="nw"
+            -9999, -9999, text=message.body, font=t.BODY,
+            width=max_bubble - t.px(28), anchor="nw",
         )
-        x1, y1, x2, y2 = self.bbox(probe)
+        _, _, px2, py2 = self.bbox(probe)
         self.delete(probe)
-        text_w, text_h = x2 - x1, y2 - y1
+        text_w, text_h = px2 + 9999, py2 + 9999
 
-        bubble_w = text_w + 28
-        bubble_h = text_h + 20
+        meta_w = 0
+        if meta:
+            gauge = self.create_text(-9999, -9999, text=meta, font=t.TINY, anchor="nw")
+            _, _, gx2, _ = self.bbox(gauge)
+            self.delete(gauge)
+            meta_w = gx2 + 9999 + t.px(10)
+
+        # The time sits inside the bubble now, so the bubble has to be wide
+        # enough for the text or for the time, whichever needs more room.
+        bubble_w = max(text_w + t.px(28), meta_w + t.px(24))
+        bubble_h = text_h + t.px(20) + (t.px(12) if meta else 0)
 
         if mine:
             right = width - self.PAD_X
             left = right - bubble_w
         else:
-            left = self.PAD_X + 34
+            left = self.PAD_X + t.px(34)
             right = left + bubble_w
-            t.draw_avatar(self, self.PAD_X + 14, y + 16, message.sender, radius=13)
-
-        t.rounded_rect(self, left, y, right, y + bubble_h, 14, fill=fill, outline="")
-        self.create_text(
-            left + 14, y + 10, text=message.body, anchor="nw", fill=ink,
-            font=t.BODY, width=max_bubble - 28,
-        )
-
-        stamp = self._clock(message.ts)
-        if mine:
-            # One tick sent, two delivered, two in colour read -- the
-            # convention every messenger uses, so it needs no explaining.
-            tick = {"SENT": "✓", "DELIVERED": "✓✓", "READ": "✓✓"}.get(message.state, "")
-            colour = t.ORANGE_DEEP if message.state == "READ" else t.MUTED
-            if stamp or tick:
-                self.create_text(
-                    right, y + bubble_h + 3, text=f"{stamp}  {tick}".strip(),
-                    anchor="ne", fill=colour, font=t.TINY,
-                )
-        elif stamp:
-            self.create_text(
-                left, y + bubble_h + 3, text=stamp, anchor="nw",
-                fill=t.MUTED, font=t.TINY,
+            # Level with the bottom of the bubble, beside the tail, which is
+            # where every messenger puts it.
+            t.draw_avatar(
+                self, self.PAD_X + t.px(14), y + bubble_h - self.AVATAR,
+                message.sender, radius=self.AVATAR,
             )
-        return y + bubble_h + self.GAP + 10
+
+        t.rounded_rect(self, left, y, right, y + bubble_h, t.px(14), fill=fill, outline="")
+        self._draw_tail(left, right, y + bubble_h, fill, mine)
+
+        self.create_text(
+            left + t.px(14), y + t.px(10), text=message.body, anchor="nw", fill=ink,
+            font=t.BODY, width=max_bubble - t.px(28),
+        )
+        if meta:
+            self.create_text(
+                right - t.px(12), y + bubble_h - t.px(7), text=meta, anchor="se",
+                fill=t.WHITE if mine else t.MUTED, font=t.TINY,
+            )
+        return y + bubble_h + self.GAP + t.px(6)
+
+    def _draw_tail(self, left: float, right: float, bottom: float, fill: str, mine: bool) -> None:
+        """The point at the bottom corner, aimed at whoever spoke.
+
+        A plain triangle: it sits flush against the bubble's own corner
+        radius, so the two read as one shape rather than two.
+        """
+        tail = self.TAIL
+        if mine:
+            points = (right - tail * 2, bottom - tail, right + tail, bottom, right - tail, bottom)
+        else:
+            points = (left + tail * 2, bottom - tail, left - tail, bottom, left + tail, bottom)
+        self.create_polygon(points, fill=fill, outline="")
 
     def _draw_empty(self, width: int) -> None:
-        height = max(self.winfo_height(), 200)
-        cx, cy = width / 2, height / 2 - 30
-        t.circle(self, cx, cy, 44, fill=t.PEACH, outline="")
-        self.create_text(cx, cy, text="✉", fill=t.ORANGE_DEEP, font=(t.FONT, 34))
+        height = max(self.winfo_height(), t.px(200))
+        cx, cy = width / 2, height / 2 - t.px(30)
+
+        # A small scene rather than one glyph in a circle: offset discs for
+        # depth, a speech bubble, and a paper plane leaving it.
+        t.circle(self, cx + t.px(16), cy + t.px(10), t.px(52), fill=t.CREAM, outline="")
+        t.circle(self, cx, cy, t.px(46), fill=t.PEACH, outline="")
+        t.rounded_rect(
+            self, cx - t.px(26), cy - t.px(18), cx + t.px(20), cy + t.px(10),
+            t.px(10), fill=t.WHITE, outline="",
+        )
+        self.create_polygon(
+            cx - t.px(18), cy + t.px(8), cx - t.px(18), cy + t.px(21), cx - t.px(6), cy + t.px(9),
+            fill=t.WHITE, outline="",
+        )
+        for dx in (-t.px(12), 0, t.px(12)):
+            t.circle(self, cx + dx, cy - t.px(4), t.px(3), fill=t.ORANGE, outline="")
+        self.create_polygon(
+            cx + t.px(26), cy - t.px(28), cx + t.px(56), cy - t.px(14),
+            cx + t.px(31), cy - t.px(7), cx + t.px(33), cy - t.px(18),
+            fill=t.ORANGE_DEEP, outline="",
+        )
+
         self.create_text(
-            cx, cy + 74, text=self._empty_text or "No messages yet",
+            cx, cy + t.px(78), text=self._empty_text or "No messages yet",
             fill=t.BROWN, font=t.H2,
         )
         self.create_text(
-            cx, cy + 100, text="Start a new conversation or say hi to your friends!",
+            cx, cy + t.px(104),
+            text="Say something -- it is encrypted before it leaves this machine.",
             fill=t.MUTED, font=t.SMALL,
         )
         self.configure(scrollregion=(0, 0, width, height))
+
+    @staticmethod
+    def _day(ts: int) -> str:
+        """Today, Yesterday, or the date. Blank for a message with no time."""
+        if not ts:
+            return ""
+        import datetime
+
+        when = datetime.datetime.fromtimestamp(ts / 1000).date()
+        today = datetime.date.today()
+        if when == today:
+            return "Today"
+        if (today - when).days == 1:
+            return "Yesterday"
+        return when.strftime("%d %B %Y")
+
 
     @staticmethod
     def _clock(ts: int) -> str:
