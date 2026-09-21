@@ -314,3 +314,101 @@ def test_inviting_reaches_the_connection(parts) -> None:
 
     assert connection.sent[0].type is MessageType.INVITE
     assert connection.sent[0].data["members"] == ["faiza"]
+
+
+# ------------------------------------------------------- history, decrypted ---
+
+
+def encrypted_pair():
+    """Two controllers that really can encrypt to each other."""
+    from im.crypto.identity import Identity
+    from im.crypto.keyring import Keyring
+
+    alice, bob = Identity.generate(), Identity.generate()
+    a_ring, b_ring = Keyring(alice, me="alice"), Keyring(bob, me="bob")
+    a_ring.remember("bob", bob.public_b64)
+    b_ring.remember("alice", alice.public_b64)
+
+    a_model, b_model = ChatModel(), ChatModel()
+    a_model.set_identity("alice")
+    b_model.set_identity("bob")
+    a = ChatController(FakeConnection(), a_model, keyring=a_ring)
+    b = ChatController(FakeConnection(), b_model, keyring=b_ring)
+    return a, b
+
+
+def history_frame(conversation: str, rows: list[dict]) -> Frame:
+    return Frame(
+        type=MessageType.HISTORY_RESULT,
+        to=conversation,
+        data={"room": conversation, "messages": rows},
+    )
+
+
+def test_stored_messages_are_decrypted_on_the_way_in() -> None:
+    """Until this worked, scrollback rendered as base64. Nothing in the
+    history path decrypted anything."""
+    alice, bob = encrypted_pair()
+    ciphertext, nonce = alice.keyring.seal("bob", "friday at six", "alice")
+
+    bob.on_frame(
+        history_frame("alice", [{"id": "1", "from": "alice", "body": ciphertext, "n": nonce,
+                                 "ts": 1}])
+    )
+
+    assert [m.body for m in bob.model.conversation("alice").messages] == ["friday at six"]
+
+
+def test_your_own_stored_messages_are_decrypted_too() -> None:
+    """A message we sent was sealed under the key we share with the recipient,
+    and X25519 is symmetric, so the same key opens it."""
+    alice, _bob = encrypted_pair()
+    ciphertext, nonce = alice.keyring.seal("bob", "friday at six", "alice")
+
+    alice.on_frame(
+        history_frame("bob", [{"id": "1", "from": "alice", "body": ciphertext, "n": nonce,
+                               "ts": 1}])
+    )
+
+    assert [m.body for m in alice.model.conversation("bob").messages] == ["friday at six"]
+
+
+def test_your_own_stored_room_messages_are_decrypted() -> None:
+    """The one case where the peer is yourself: a room message is sealed to
+    every member including the sender, precisely so this works."""
+    alice, _bob = encrypted_pair()
+    envelopes = alice.keyring.seal_for_members(["bob"], "friday at six", "alice")
+    ciphertext, nonce = envelopes["alice"]
+
+    alice.on_frame(
+        history_frame("#study", [{"id": "1", "from": "alice", "body": ciphertext, "n": nonce,
+                                  "ts": 1}])
+    )
+
+    assert [m.body for m in alice.model.conversation("#study").messages] == ["friday at six"]
+
+
+def test_a_stored_message_that_will_not_open_is_reported_in_place() -> None:
+    """Not dropped. A message the user cannot read is something they need to
+    know about, not something to hide."""
+    _alice, bob = encrypted_pair()
+
+    bob.on_frame(
+        history_frame("alice", [{"id": "1", "from": "alice", "body": "bm90IHJlYWw=",
+                                 "n": "bm90IHJlYWw=", "ts": 1}])
+    )
+
+    assert "could not decrypt" in bob.model.conversation("alice").messages[0].body
+
+
+def test_plaintext_history_still_loads_without_a_keyring() -> None:
+    connection = FakeConnection()
+    model = ChatModel()
+    model.set_identity("alice")
+    controller = ChatController(connection, model)
+
+    controller.on_frame(
+        history_frame("bob", [{"id": "1", "from": "bob", "body": "hello", "ts": 1}])
+    )
+
+    assert [m.body for m in model.conversation("bob").messages] == ["hello"]

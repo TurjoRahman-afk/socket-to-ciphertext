@@ -350,13 +350,44 @@ class ChatController:
                 Message(
                     id=str(row.get("id", "")),
                     sender=str(row.get("from", "?")),
-                    body=str(row.get("body") or ""),
+                    body=self._stored_plaintext(row, str(key), me or ""),
                     ts=int(row.get("ts") or now_ms()),
                     mine=row.get("from") == me,
                 )
                 for row in frame.data.get("messages") or []
             ],
         )
+
+    def _stored_plaintext(self, row: dict, key: str, me: str) -> str:
+        """The readable body of one stored message.
+
+        History rows are encrypted exactly as live ones are, and until this
+        existed nothing decrypted them -- scrollback rendered as base64.
+
+        Which key opens a row depends on who wrote it. X25519 is symmetric, so
+        a message we sent to X was sealed under the key we share with X, and a
+        message X sent to us under the same one. The only case that is not the
+        other party is our own copy of a room message, which was sealed to
+        ourselves so that this method could read it back.
+        """
+        body = str(row.get("body") or "")
+        nonce = row.get("n")
+        if self.keyring is None or not nonce:
+            return body
+
+        author = str(row.get("from") or "")
+        if author != me:
+            peer = author
+        elif key.startswith(ROOM_PREFIX):
+            peer = me
+        else:
+            peer = key
+
+        try:
+            return self.keyring.open(peer, body, str(nonce), author)
+        except DecryptionFailed:
+            log.warning("could not decrypt a stored message from %s", author or "?")
+            return "[could not decrypt this message]"
 
     def _room_state(self, frame: Frame) -> None:
         room = frame.data.get("room") or frame.to
