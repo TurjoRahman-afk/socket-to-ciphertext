@@ -436,7 +436,7 @@ def test_login_ok_loads_the_contact_list(parts) -> None:
     )
 
     assert "faiza" in model.contacts
-    assert model.known_users() == ["aya", "faiza"]
+    assert model.contact_names() == ["faiza"], "the roster is presence, not contacts"
 
 
 def test_a_contacts_frame_replaces_the_list(parts) -> None:

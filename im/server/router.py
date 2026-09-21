@@ -242,13 +242,22 @@ class MessageRouter:
         self._send_contacts(session)
 
     def _note_contact(self, owner: str, other: str) -> None:
-        """Remember somebody you actually talked to.
+        """Remember somebody you actually talked to, and say so.
 
         Messaging a person is the clearest possible statement that you know
         them, so it does not need a separate gesture.
+
+        The owner is told when the list actually changes. Without that the
+        contact was stored but nothing on screen moved, so it only appeared
+        after the next login -- which looks exactly like it did not work.
         """
-        if self.contacts is not None and other and not other.startswith(ROOM_PREFIX):
-            self.contacts.add(owner, other, now_ms())
+        if self.contacts is None or not other or other.startswith(ROOM_PREFIX):
+            return
+        if not self.contacts.add(owner, other, now_ms()):
+            return  # already there, so nobody's list changed
+        theirs = self.sessions.get(owner)
+        if theirs is not None:
+            self._send_contacts(theirs)
 
     def _get_key(self, session: Session, frame: Frame) -> None:
         """Hand out somebody's public key.

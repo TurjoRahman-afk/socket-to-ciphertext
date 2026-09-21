@@ -392,25 +392,34 @@ def test_an_offline_contact_is_still_a_contact() -> None:
     assert model.contacts["aya"] is False
 
 
-def test_known_users_covers_contacts_and_presence() -> None:
-    """The room dialog reads this. Reading presence alone meant nobody
-    offline could be added to a room."""
+def test_being_online_does_not_make_somebody_a_contact() -> None:
+    """This asserted the opposite. Folding presence into the contact list
+    meant strangers appeared in it purely because they were connected."""
     model = ChatModel()
     model.set_identity("turjo")
     model.replace_contacts([{"user": "faiza", "online": False}])
     model.replace_roster(["aya"])
 
-    assert model.known_users() == ["aya", "faiza"]
+    assert model.contact_names() == ["faiza"]
 
 
-def test_known_users_puts_online_people_first() -> None:
+def test_an_offline_contact_is_still_listed() -> None:
+    """Being offline is a state to show, not a reason to disappear."""
+    model = ChatModel()
+    model.set_identity("turjo")
+    model.replace_contacts([{"user": "faiza", "online": False}])
+
+    assert model.contact_names() == ["faiza"]
+
+
+def test_contacts_are_listed_online_first() -> None:
     model = ChatModel()
     model.set_identity("turjo")
     model.replace_contacts(
         [{"user": "aya", "online": False}, {"user": "zara", "online": True}]
     )
 
-    assert model.known_users() == ["zara", "aya"]
+    assert model.contact_names() == ["zara", "aya"]
 
 
 def test_you_are_never_in_your_own_contact_list() -> None:
@@ -418,4 +427,4 @@ def test_you_are_never_in_your_own_contact_list() -> None:
     model.set_identity("turjo")
     model.replace_contacts([{"user": "turjo", "online": True}, {"user": "aya", "online": True}])
 
-    assert model.known_users() == ["aya"]
+    assert model.contact_names() == ["aya"]

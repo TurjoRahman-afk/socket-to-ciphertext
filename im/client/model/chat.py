@@ -120,14 +120,18 @@ class ChatModel:
             self.roster.setdefault(name, online)
         self._emit(ContactsChanged(tuple(sorted(self.contacts))))
 
-    def known_users(self) -> list[str]:
-        """Everyone this client could plausibly message, online first.
+    def contact_names(self) -> list[str]:
+        """The people this person has kept, online first.
 
-        Contacts and anybody seen this session, together. The room dialog and
-        the contacts view both want this rather than raw presence.
+        Contacts only. Not the roster -- being online is not the same as
+        being known, and folding the two together listed strangers in your
+        contact list purely because they happened to be connected.
+
+        Messaging somebody adds them server-side, so anyone you actually talk
+        to turns up here without a separate gesture.
         """
         me = self.username
-        names = {name for name in (*self.contacts, *self.roster) if name and name != me}
+        names = [name for name in self.contacts if name and name != me]
         return sorted(names, key=lambda name: (not self.is_online(name), name.lower()))
 
     def set_presence(self, user: str, online: bool) -> None:

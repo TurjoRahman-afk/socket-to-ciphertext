@@ -1003,3 +1003,31 @@ def test_inviting_an_unknown_name_names_it(router_with_contacts) -> None:
     assert router.rooms.members("#study") == {"faiza", "aya"}
     errors = [f for f in faiza.outbox if f.type is MessageType.ERROR]
     assert errors and "ghost" in errors[-1].data["message"]
+
+
+def test_messaging_somebody_updates_the_list_on_screen(router_with_contacts) -> None:
+    """Storing the contact is not enough. Without telling the client, nothing
+    moved until the next login, which looks exactly like it did not work."""
+    router = router_with_contacts
+    faiza = online(router, "faiza")
+    online(router, "aya")
+    quiet(faiza)
+
+    router.handle(faiza, Frame(type=MessageType.MSG, to="aya", body="hello"))
+
+    updates = [f for f in faiza.outbox if f.type is MessageType.CONTACTS]
+    assert updates, "the sender should be told their contact list grew"
+    assert [entry["user"] for entry in updates[-1].data["contacts"]] == ["aya"]
+
+
+def test_messaging_the_same_person_twice_sends_one_update(router_with_contacts) -> None:
+    """Nothing changed the second time, so there is nothing to report."""
+    router = router_with_contacts
+    faiza = online(router, "faiza")
+    online(router, "aya")
+    router.handle(faiza, Frame(type=MessageType.MSG, to="aya", body="hello"))
+    quiet(faiza)
+
+    router.handle(faiza, Frame(type=MessageType.MSG, to="aya", body="again"))
+
+    assert [f for f in faiza.outbox if f.type is MessageType.CONTACTS] == []

@@ -395,13 +395,12 @@ class TkView:
             self.controller.invite(room, answer[1])
 
     def _contacts(self) -> list[str]:
-        """Everyone we could plausibly message, online first.
+        """The people we have kept, online first.
 
-        Contacts plus anybody seen this session. Reading presence alone is
-        what made this list empty on every restart, and what stopped anybody
-        offline from being added to a room.
+        Contacts, not presence. Anybody else can be reached by typing their
+        name -- in the room dialog, or in the contacts window.
         """
-        return self.model.known_users()
+        return self.model.contact_names()
 
     @staticmethod
     def _hashed(room: str) -> str:
@@ -500,10 +499,11 @@ class TkView:
         if names:
             for name in names:
                 dot = "●" if self.model.is_online(name) else "○"
-                kept = "" if name in self.model.contacts else "   (not saved)"
-                listbox.insert("end", f" {dot}  {name}{kept}")
+                listbox.insert("end", f" {dot}  {name}")
         else:
-            listbox.insert("end", "  Nobody yet. Add somebody below.")
+            listbox.insert(
+                "end", "  Nobody yet. Add somebody below, or message them."
+            )
 
         tk.Label(
             frame, text="Add someone by username", bg=t.PAGE, fg=t.BROWN,
