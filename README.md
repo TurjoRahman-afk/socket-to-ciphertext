@@ -1,12 +1,15 @@
-# Socket to Ciphertext
+# Semaphore
 
 An instant messaging system written in Python, from the raw TCP socket at the
 bottom to end-to-end encrypted messages at the top, with a Tkinter interface
 that lands last on purpose.
 
-The server routes messages. By the end, it will not be able to read them.
+The server routes messages. It cannot read them.
 
-Built as coursework, in nine phases, each one ending in something that runs.
+> The repository is called **socket-to-ciphertext** after the arc it was built
+> along — the raw socket at one end, encryption at the other. The application
+> is called **Semaphore**. Built as coursework, in nine phases, each one ending
+> in something that runs.
 
 ---
 
@@ -55,9 +58,10 @@ messages; presence when someone logs in or drops; typing indicators; and
 live in sqlite. Kill the server, start it again, log back in: anything sent
 while you were away is delivered, and `/history` fetches the scrollback.
 
-**Messages are encrypted end to end.** Run the server with `--tls` and the
-clients with `--tls`, and the server routes and stores ciphertext it cannot
-read:
+**Messages are encrypted end to end**, always — no flag required. The server
+routes and stores ciphertext it holds no key for. Adding `--tls` on both ends
+encrypts the framing and metadata as well, against third parties on the
+network:
 
 ```
 alice types :  the secret word is swordfish 🔐
@@ -105,7 +109,7 @@ member inside it.
 | 5 | Persistence, accounts, offline delivery | **done** |
 | 6 | TLS and end-to-end encryption | **done** |
 | 7 | Tkinter interface (design pass first) | **done** |
-| 8 | Internet demo, hardening, report | hardening **done**; tunnel and report outstanding |
+| 8 | Internet demo, hardening, report | hardening and report **done**; tunnel outstanding |
 
 ---
 
@@ -115,7 +119,7 @@ member inside it.
   gets an explanation rather than a confusing `ImportError`.
 - tkinter 8.6, bundled with the standard CPython installer on Windows and
   macOS. On Debian or Ubuntu: `sudo apt install python3-tk`. Not needed
-  before phase 7.
+  before the window existed.
 - Everything else is in `requirements.txt`.
 
 ## Setup
@@ -184,8 +188,8 @@ with a `BAD_FRAME` error without hanging up on you.
 
 Every client connects to one server, which routes between them. Offline
 delivery, message history and presence all need somewhere central to live.
-End-to-end encryption (phase 6) is what stops the hub reading what it routes,
-so centralising delivery does not mean trusting the server with content.
+End-to-end encryption is what stops the hub reading what it routes, so
+centralising delivery does not mean trusting the server with content.
 
 ### Threads, not asyncio
 
@@ -230,7 +234,7 @@ Two rules hold the concurrency together:
         |
    +----+----+
  console    tk/       two interchangeable views over one model
- (phase 3)  (phase 7)   both built, both working
+                       both built, both working
 ```
 
 `im/client/model/` may never import `tkinter`. That is not a convention —
@@ -266,9 +270,9 @@ has to care.
 Implemented so far: `REGISTER`, `LOGIN`, `MSG`, `CREATE_ROOM`, `JOIN`,
 `LEAVE`, `TYPING`, `PING`, and the server's `OK`, `LOGIN_OK`, `ACK`,
 `ROOM_STATE`, `PRESENCE`, `PONG`, `ERROR`. Only `HISTORY`, `GET_KEY` and `KEY`
-remain, and they land with persistence and encryption in phases 5 and 6.
+remain, and they land with persistence and encryption.
 
-The full specification, frozen at the end of phase 1, is in
+The full specification is in
 [docs/protocol.md](docs/protocol.md). Changing anything in it needs agreement
 from both tracks and a bump of `v`.
 
@@ -276,8 +280,23 @@ from both tracks and a bump of `v`.
 
 ## Security
 
-**Nothing is encrypted yet.** TLS and end-to-end encryption are phase 6. What
-the server already does:
+**Every message body is end-to-end encrypted**, direct messages and rooms
+alike. The server routes and stores ciphertext it holds no key for.
+
+- a direct message is sealed once, for its recipient
+- a room message is sealed once **per member**, with a fresh nonce for each --
+  two members share no key, and that pairing is what makes nonce reuse
+  catastrophic
+- a copy is sealed to the sender too, so your own history stays readable
+- sealing is all or nothing: a missing key holds the message and fetches the
+  key, rather than sending part of it in the clear
+
+TLS is a **separate, optional** layer (`--tls` on both ends). It protects the
+framing and metadata from third parties on the network. It does not protect
+anything from the server, because that is where it terminates, and `run.bat`
+does not pass it.
+
+Alongside the encryption:
 
 - passwords never travel or rest in plaintext — the client sends a digest,
   and the server compares it in constant time with `hmac.compare_digest`
@@ -290,20 +309,25 @@ the server already does:
   slow to drain 1000 queued frames is disconnected rather than allowed to
   exhaust memory
 
-Phase 6 adds an X25519 keypair per client, ECDH to HKDF to AES-GCM with a
-fresh nonce per message, and TLS on the socket underneath. The server will
-then hold ciphertext only.
+The mechanism is an X25519 keypair per client, ECDH to HKDF to AES-GCM with a
+fresh nonce per message. The private half never leaves the machine that
+generated it.
 
-What that will and will not protect — including metadata, forward secrecy and
-key verification, none of which this design gives you — is written down
-honestly in [docs/threat-model.md](docs/threat-model.md).
+**What this does not protect.** The server knows who talks to whom and when,
+because it routes — with every body sealed, that metadata is the largest
+remaining exposure. There is no forward secrecy and no key verification, so a
+malicious server could substitute a public key and read everything. Searching
+is client-side over what has been decrypted, because the server cannot read
+what it stores. All of it is written down without hedging in
+[docs/threat-model.md](docs/threat-model.md), including the fact that an
+earlier version of that file claimed room encryption before it existed.
 
 ---
 
 ## Tests and tooling
 
 ```bash
-pytest                  # 266 tests; a hung test fails after 30s
+pytest                  # 316 tests; a hung test fails after 30s
 pytest --cov            # coverage, for the report
 pytest tests/test_router.py   # routing rules, no sockets, instant
 ruff check .            # lint
@@ -334,9 +358,9 @@ failing. It has already caught one.
 ```
 docs/          protocol spec, threat model, design report
 im/common/     frames, codec, ids -- shared by both sides of the wire
-im/crypto/     X25519 identity, AES-GCM envelope, TLS helpers   (phase 6)
+im/crypto/     X25519 identity, AES-GCM envelope, TLS helpers
 im/server/     accept loop, per-client handler, router, registries, store
-im/client/     net, model, controller, views                    (phase 3, 7)
+im/client/     net, model, controller, views
 tests/
 ```
 
@@ -377,6 +401,6 @@ an honest boundary.
 
 ## Documentation
 
-- [docs/protocol.md](docs/protocol.md) — the wire format, frozen after phase 1
+- [docs/protocol.md](docs/protocol.md) — the wire format
 - [docs/threat-model.md](docs/threat-model.md) — what the encryption will and will not protect
 - [docs/design.md](docs/design.md) — the submitted report
