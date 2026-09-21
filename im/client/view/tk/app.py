@@ -475,6 +475,7 @@ class TkView:
         listbox.bind("<Double-Button-1>", open_selected)
         listbox.bind("<Return>", open_selected)
         window.bind("<Escape>", lambda _e: window.destroy())
+        self._centre(window)
         listbox.focus_set()
 
     def _show_contacts(self) -> None:
@@ -543,6 +544,7 @@ class TkView:
 
         listbox.bind("<Double-Button-1>", open_selected)
         window.bind("<Escape>", lambda _e: window.destroy())
+        self._centre(window)
         entry.focus_set()
 
 
@@ -589,6 +591,21 @@ class TkView:
             self._refresh_list()
         elif isinstance(event, ErrorRaised):
             self.transcript.notice(f"{event.code}: {event.message}")
+
+    def _centre(self, window: tk.Toplevel) -> None:
+        """Put a window over the one it belongs to, not in the screen corner.
+
+        Tk places a new Toplevel wherever the window manager likes, which on
+        Windows is the top left. A dialog that opens away from the window it
+        came from is easy to miss entirely.
+        """
+        window.update_idletasks()
+        try:
+            x = self.root.winfo_rootx() + (self.root.winfo_width() - window.winfo_width()) // 2
+            y = self.root.winfo_rooty() + (self.root.winfo_height() - window.winfo_height()) // 3
+        except tk.TclError:  # pragma: no cover -- the window went away
+            return
+        window.geometry(f"+{max(x, 0)}+{max(y, 0)}")
 
     def _on_callback_error(self, exc_type, value, trace) -> None:
         """Show what Tk would otherwise have thrown away."""

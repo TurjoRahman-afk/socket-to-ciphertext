@@ -286,12 +286,23 @@ class RoomDialog(tk.Toplevel):
         accept.pack(side="right")
 
     def _centre_on(self, master: tk.Misc) -> None:
+        """Over the parent, but never off the bottom of the screen.
+
+        This dialog grew a members list and a name field, and a tall one
+        placed a third of the way down the parent put its buttons below the
+        taskbar -- where a Create button is no use to anybody.
+        """
         try:
-            x = master.winfo_rootx() + (master.winfo_width() - self.winfo_width()) // 2
-            y = master.winfo_rooty() + (master.winfo_height() - self.winfo_height()) // 3
+            width, height = self.winfo_width(), self.winfo_height()
+            x = master.winfo_rootx() + (master.winfo_width() - width) // 2
+            y = master.winfo_rooty() + (master.winfo_height() - height) // 3
+            limit_x = self.winfo_screenwidth() - width
+            # Leave room for a taskbar rather than assuming the screen is free
+            # all the way down.
+            limit_y = self.winfo_screenheight() - height - t.px(48)
         except tk.TclError:
             return
-        self.geometry(f"+{max(x, 0)}+{max(y, 0)}")
+        self.geometry(f"+{max(0, min(x, limit_x))}+{max(0, min(y, limit_y))}")
 
     # --------------------------------------------------------------- answers ---
 
