@@ -456,3 +456,114 @@ def test_adding_a_contact_reaches_the_connection(parts) -> None:
 
     assert connection.sent[-1].type is MessageType.ADD_CONTACT
     assert connection.sent[-1].data["user"] == "faiza"
+
+
+# -------------------------------------------------- opening a conversation ---
+
+
+def test_a_chat_does_not_open_for_a_name_with_no_account(parts) -> None:
+    """A username nobody registered used to get a chat window anyway."""
+    connection, model, controller = parts
+
+    controller.open_conversation("vagif")
+    assert "vagif" not in model.conversations, "nothing should open before the server answers"
+
+    controller.on_frame(
+        Frame(
+            type=MessageType.ERROR,
+            data={"code": "NO_SUCH_USER", "message": "nobody is registered as vagif"},
+        )
+    )
+
+    assert "vagif" not in model.conversations
+    assert connection.sent[-1].type is MessageType.ADD_CONTACT
+
+
+def test_a_chat_opens_once_the_server_confirms_the_account(parts) -> None:
+    _connection, model, controller = parts
+
+    controller.open_conversation("faiza")
+    controller.on_frame(
+        Frame(type=MessageType.CONTACTS, data={"contacts": [{"user": "faiza", "online": True}]})
+    )
+
+    assert model.active == "faiza"
+
+
+def test_somebody_already_known_opens_without_a_round_trip(parts) -> None:
+    """There is nothing to find out, so there is no reason to wait."""
+    _connection, model, controller = parts
+    model.replace_contacts([{"user": "aya", "online": True}])
+
+    controller.open_conversation("aya")
+
+    assert model.active == "aya"
+
+
+def test_you_cannot_open_a_chat_with_yourself(parts) -> None:
+    _connection, model, controller = parts
+    model.set_identity("turjo")
+
+    controller.open_conversation("turjo")
+
+    assert "turjo" not in model.conversations
+
+
+def test_a_stale_refusal_does_not_open_a_later_chat(parts) -> None:
+    """The pending request must be forgotten, or an unrelated contact list
+    arriving later would open a chat nobody asked for any more."""
+    _connection, model, controller = parts
+
+    controller.open_conversation("vagif")
+    controller.on_frame(Frame(type=MessageType.ERROR, data={"code": "NO_SUCH_USER"}))
+    controller.on_frame(
+        Frame(type=MessageType.CONTACTS, data={"contacts": [{"user": "vagif", "online": True}]})
+    )
+
+    assert model.active != "vagif"
+
+
+# --------------------------------------------------------- opening a room ---
+
+
+def test_a_room_that_already_exists_is_joined_instead(parts) -> None:
+    """The client cannot tell "does not exist" from "exists without me", so
+    it guesses CREATE_ROOM and has to correct itself. Without this it never
+    joined, and was left looking at a room with nobody in it."""
+    connection, _model, controller = parts
+
+    controller.open_room("#gg", [])
+    assert connection.sent[-1].type is MessageType.CREATE_ROOM
+
+    controller.on_frame(Frame(type=MessageType.ERROR, data={"code": "ROOM_EXISTS"}))
+
+    assert connection.sent[-1].type is MessageType.JOIN
+    assert connection.sent[-1].data["room"] == "#gg"
+
+
+def test_members_asked_for_are_invited_after_joining(parts) -> None:
+    connection, _model, controller = parts
+
+    controller.open_room("#gg", ["aya"])
+    controller.on_frame(Frame(type=MessageType.ERROR, data={"code": "ROOM_EXISTS"}))
+
+    assert connection.sent[-1].type is MessageType.INVITE
+    assert connection.sent[-1].data["members"] == ["aya"]
+
+
+def test_a_room_opens_only_once_we_are_really_in_it(parts) -> None:
+    _connection, model, controller = parts
+    model.set_identity("keisha")
+
+    controller.open_room("#gg", [])
+
+    # Somebody else's room state arrives first; we are not in it yet.
+    controller.on_frame(
+        Frame(type=MessageType.ROOM_STATE, data={"room": "#gg", "members": ["aya"]})
+    )
+    assert model.active != "#gg", "an empty room is not worth showing"
+
+    controller.on_frame(
+        Frame(type=MessageType.ROOM_STATE, data={"room": "#gg", "members": ["aya", "keisha"]})
+    )
+    assert model.active == "#gg"

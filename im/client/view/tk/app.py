@@ -344,11 +344,11 @@ class TkView:
         who = simpledialog.askstring("New message", "Who do you want to talk to?", parent=self.root)
         if not who or not who.strip():
             return
-        name = who.strip()
-        # Keep them, so the conversation is still reachable after a restart.
-        # The server refuses a name with no account and says so.
-        self.controller.add_contact(name)
-        self.controller.select(name)
+        # Opens once the server confirms the account exists, and keeps them so
+        # the conversation survives a restart. Opening first and asking after
+        # is what put a chat window on screen for a name nobody had
+        # registered.
+        self.controller.open_conversation(who.strip())
 
     def _room_menu(self) -> None:
         """Make a room, with whoever should be in it.
@@ -366,16 +366,10 @@ class TkView:
         if answer is None:
             return
 
-        name = self._hashed(answer[0])
-        members = answer[1]
-
-        if name in self.model.rooms:
-            self.controller.join(name)
-            if members:
-                self.controller.invite(name, members)
-        else:
-            self.controller.create_room(name, members)
-        self.controller.select(name)
+        # The controller decides between making and joining, and corrects
+        # itself if it guesses wrong. It opens the room once the server has
+        # confirmed we are actually in it.
+        self.controller.open_room(self._hashed(answer[0]), answer[1])
 
     def _invite_menu(self) -> None:
         """Add people to the room on screen."""
@@ -530,7 +524,7 @@ class TkView:
             # The server answers NO_SUCH_USER when there is no such account,
             # and that error already reaches the transcript. Nothing is
             # invented here about whether it worked.
-            self.controller.add_contact(name)
+            self.controller.open_conversation(name)
             window.destroy()
 
         entry.bind("<Return>", add)

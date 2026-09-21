@@ -38,6 +38,12 @@ class ChatController:
         # can arrive from somebody we have never spoken to, so the first
         # thing they say may well need a key fetch of its own.
         self._awaiting: dict[str, list[Frame]] = {}
+        # A conversation asked for but not yet agreed to by the server. The
+        # view used to open one immediately, so a username with no account
+        # got a chat window and a room that already existed got an empty one
+        # that could not be posted to.
+        self._pending_user: str | None = None
+        self._pending_room: tuple[str, list[str]] | None = None
 
     # ---------------------------------------------------- gestures -> frames ---
 
@@ -165,6 +171,52 @@ class ChatController:
     def invite(self, room: str, members: list[str]) -> None:
         self.connection.invite(room, members)
 
+    def open_conversation(self, user: str) -> None:
+        """Open a chat with somebody, once we know they exist.
+
+        Somebody already known is opened at once -- there is nothing to find
+        out. A new name is asked about first: the server answers either with a
+        contact list containing them or with NO_SUCH_USER, and only the first
+        opens anything. Opening first and asking afterwards is what put a chat
+        window on screen for a username nobody had registered.
+        """
+        user = user.strip()
+        if not user:
+            return
+        if user.startswith(ROOM_PREFIX):
+            self.open_room(user, [])
+            return
+        if user == self.model.username:
+            self.model.raise_error("BAD_CONTACT", "you cannot message yourself")
+            return
+        if user in self.model.contacts or user in self.model.roster:
+            self.select(user)
+            return
+
+        self._pending_user = user
+        self.connection.add_contact(user)
+
+    def open_room(self, room: str, members: list[str] | None = None) -> None:
+        """Make a room, or join it if somebody already made it.
+
+        The client cannot tell the two apart: model.rooms holds only the rooms
+        it is already in, so a room that exists and that we are not in looks
+        exactly like a room that does not exist. Guessing wrong meant sending
+        CREATE_ROOM, getting ROOM_EXISTS, never joining, and being left
+        looking at an empty room nothing could be posted to.
+
+        So it guesses, and corrects itself on ROOM_EXISTS.
+        """
+        members = list(members or [])
+        self._pending_room = (room, members)
+
+        if room in self.model.rooms:
+            self.join(room)
+            if members:
+                self.invite(room, members)
+        else:
+            self.create_room(room, members)
+
     def add_contact(self, user: str) -> None:
         self.connection.add_contact(user)
 
@@ -200,15 +252,15 @@ class ChatController:
             self._history_result(frame)
         elif frame.type is MessageType.CONTACTS:
             self.model.replace_contacts(frame.data.get("contacts") or [])
+            self._open_pending_user()
         elif frame.type is MessageType.ROOM_STATE:
             self._room_state(frame)
         elif frame.type is MessageType.LOGIN_OK:
             self._logged_in(frame)
         elif frame.type is MessageType.ERROR:
-            self.model.raise_error(
-                str(frame.data.get("code", "ERROR")),
-                str(frame.data.get("message", "")),
-            )
+            code = str(frame.data.get("code", "ERROR"))
+            self._on_error(code)
+            self.model.raise_error(code, str(frame.data.get("message", "")))
         elif frame.type in (MessageType.ACK, MessageType.PONG, MessageType.OK):
             pass  # Nothing for a view to show yet.
         else:
@@ -403,6 +455,37 @@ class ChatController:
             return
         members = frame.data.get("members") or []
         self.model.set_room_members(str(room), [str(name) for name in members])
+
+        # The room we asked for exists and we are in it. Now it is worth
+        # showing, and its member list is real rather than empty.
+        if self._pending_room and self._pending_room[0] == str(room):
+            if self.model.username in self.model.room_members(str(room)):
+                self._pending_room = None
+                self.select(str(room))
+
+    def _open_pending_user(self) -> None:
+        """A contact list arrived. Open the chat we were waiting to confirm."""
+        user = self._pending_user
+        if user is not None and user in self.model.contacts:
+            self._pending_user = None
+            self.select(user)
+
+    def _on_error(self, code: str) -> None:
+        """Undo, or correct, whatever we asked for that was refused."""
+        if code == "NO_SUCH_USER":
+            # Nothing was opened, so there is nothing to clean up. Forgetting
+            # the request is what stops a later, unrelated contact list from
+            # opening a chat nobody asked for any more.
+            self._pending_user = None
+        elif code == "ROOM_EXISTS" and self._pending_room is not None:
+            # Somebody else made it first. Join it instead of leaving the
+            # user with a room they are not in.
+            room, members = self._pending_room
+            self.join(room)
+            if members:
+                self.invite(room, members)
+        elif code in ("NO_SUCH_ROOM", "BAD_ROOM"):
+            self._pending_room = None
 
     def _logged_in(self, frame: Frame) -> None:
         username = frame.data.get("user")
