@@ -115,3 +115,44 @@ class SqliteUsers:
     def __len__(self) -> int:
         with self.db.read() as conn:
             return int(conn.execute("SELECT COUNT(*) AS n FROM users").fetchone()["n"])
+
+
+class SqliteContacts:
+    """Who each person keeps in their contact list.
+
+    Separate from the roster, which is presence: the roster answers "who is
+    connected right now", and this answers "who do I know". Conflating them
+    meant a contact list that emptied itself every time the program restarted,
+    and a room dialog that could only offer people who happened to be online.
+
+    One row per direction. Adding somebody does not add you to theirs.
+    """
+
+    def __init__(self, database) -> None:
+        self.db = database
+
+    def add(self, owner: str, contact: str, when: int) -> bool:
+        """Remember a contact. False if it was already there."""
+        if not owner or not contact or owner == contact:
+            return False
+        with self.db.write() as conn:
+            cursor = conn.execute(
+                "INSERT OR IGNORE INTO contacts (owner, contact, added_at) VALUES (?, ?, ?)",
+                (owner, contact, when),
+            )
+            return cursor.rowcount > 0
+
+    def remove(self, owner: str, contact: str) -> bool:
+        with self.db.write() as conn:
+            cursor = conn.execute(
+                "DELETE FROM contacts WHERE owner = ? AND contact = ?", (owner, contact)
+            )
+            return cursor.rowcount > 0
+
+    def of(self, owner: str) -> list[str]:
+        """This person's contacts, alphabetically."""
+        with self.db.read() as conn:
+            rows = conn.execute(
+                "SELECT contact FROM contacts WHERE owner = ? ORDER BY contact", (owner,)
+            ).fetchall()
+        return [row["contact"] for row in rows]

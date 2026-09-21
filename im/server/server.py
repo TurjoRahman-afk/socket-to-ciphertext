@@ -18,7 +18,7 @@ from im.server.router import MessageRouter
 from im.server.store.db import MEMORY, Database
 from im.server.store.messages import MessageStore
 from im.server.store.rooms import SqliteRooms
-from im.server.store.users import SqliteUsers
+from im.server.store.users import SqliteContacts, SqliteUsers
 
 log = logging.getLogger(__name__)
 
@@ -51,7 +51,10 @@ class ChatServer:  # this represents the whole server
         self.rooms = SqliteRooms(self.db)
         self.users = SqliteUsers(self.db)
         self.messages = MessageStore(self.db)
-        self.router = MessageRouter(self.sessions, self.rooms, self.users, self.messages)
+        self.contacts = SqliteContacts(self.db)
+        self.router = MessageRouter(
+            self.sessions, self.rooms, self.users, self.messages, self.contacts
+        )
 
         # the listener is none but after bind() it is tcp listening socket
         self._listener: socket.socket | None = None

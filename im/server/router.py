@@ -24,7 +24,7 @@ from im.server.store.messages import (
     MessageStore,
     direct_conversation,
 )
-from im.server.store.users import SqliteUsers
+from im.server.store.users import SqliteContacts, SqliteUsers
 
 log = logging.getLogger(__name__)
 
@@ -43,6 +43,7 @@ class MessageRouter:
         rooms: RoomRegistry,  # who is in which room
         users: SqliteUsers,  # who has an account
         messages: MessageStore | None = None,  # history and offline queue
+        contacts: SqliteContacts | None = None,  # who each person knows
     ) -> None:
         # live connections. Is Alice online right now ? and how do i reach her ?
         self.sessions = sessions
@@ -52,6 +53,9 @@ class MessageRouter:
         self.users = users
         # history, and what is owed to people who are not here
         self.messages = messages
+        # contact lists. Separate from `sessions`, which is presence: one
+        # answers "who do I know", the other "who is connected right now".
+        self.contacts = contacts
 
     # ------------------------------------------------------------ inbound ---
 
@@ -82,6 +86,10 @@ class MessageRouter:
             self._leave(session, frame)
         elif frame.type is MessageType.INVITE:
             self._invite(session, frame)
+        elif frame.type is MessageType.ADD_CONTACT:
+            self._add_contact(session, frame)
+        elif frame.type is MessageType.REMOVE_CONTACT:
+            self._remove_contact(session, frame)
         elif frame.type is MessageType.TYPING:
             self._typing(session, frame)
         elif frame.type is MessageType.RECEIPT:
@@ -163,7 +171,13 @@ class MessageRouter:
                 to=username,
                 data={
                     "user": username,
+                    # Presence: who is connected this second.
                     "roster": [u for u in self.sessions.usernames() if u != username],
+                    # Contacts: who this person knows, online or not. Without
+                    # this the client had nothing but presence, so a restart
+                    # emptied the contact list and the room dialog could only
+                    # offer whoever happened to be connected.
+                    "contacts": self._contact_states(username),
                     "rooms": self.rooms.rooms_of(username),
                 },
             )
@@ -173,6 +187,68 @@ class MessageRouter:
         # After LOGIN_OK, so the client already knows who it is and has its
         # roster before messages start arriving.
         self._flush_pending(session, username)
+
+    # ------------------------------------------------------------ contacts ---
+
+    def _contact_states(self, username: str) -> list[dict]:
+        """This person's contacts, each with whether they are online."""
+        if self.contacts is None:
+            return []
+        online = set(self.sessions.usernames())
+        return [
+            {"user": name, "online": name in online} for name in self.contacts.of(username)
+        ]
+
+    def _send_contacts(self, session: Session) -> None:
+        session.send(
+            Frame(
+                type=MessageType.CONTACTS,
+                to=session.username,
+                data={"contacts": self._contact_states(session.username or "")},
+            )
+        )
+
+    def _add_contact(self, session: Session, frame: Frame) -> None:
+        """Remember somebody, so they are still there after a restart."""
+        if self.contacts is None:
+            session.send(error("UNSUPPORTED", "this server keeps no contacts"))
+            return
+
+        name = frame.data.get("user")
+        if not name or not isinstance(name, str):
+            session.send(error("NO_RECIPIENT", "ADD_CONTACT needs a user"))
+            return
+        if name == session.username:
+            session.send(error("BAD_CONTACT", "you are already in your own contacts"))
+            return
+        if name.startswith(ROOM_PREFIX):
+            session.send(error("BAD_CONTACT", "a room is not a contact -- JOIN it instead"))
+            return
+        if not self.users.exists(name):
+            # Named plainly. Silently ignoring it is what made adding somebody
+            # to a room look like it had worked when it had not.
+            session.send(error("NO_SUCH_USER", f"nobody is registered as {name}"))
+            return
+
+        self.contacts.add(session.username or "", name, now_ms())
+        self._send_contacts(session)
+
+    def _remove_contact(self, session: Session, frame: Frame) -> None:
+        if self.contacts is None:
+            return
+        name = frame.data.get("user")
+        if name and isinstance(name, str):
+            self.contacts.remove(session.username or "", name)
+        self._send_contacts(session)
+
+    def _note_contact(self, owner: str, other: str) -> None:
+        """Remember somebody you actually talked to.
+
+        Messaging a person is the clearest possible statement that you know
+        them, so it does not need a separate gesture.
+        """
+        if self.contacts is not None and other and not other.startswith(ROOM_PREFIX):
+            self.contacts.add(owner, other, now_ms())
 
     def _get_key(self, session: Session, frame: Frame) -> None:
         """Hand out somebody's public key.
@@ -237,11 +313,23 @@ class MessageRouter:
             session.send(error("NOT_A_MEMBER", f"join {room} before inviting anyone to it"))
             return
 
-        added = self._add_members(room, frame.data.get("members"))
-        if not added:
-            session.send(error("NO_SUCH_USER", "none of those names have an account"))
-            return
-        self._broadcast_room_state(room)
+        wanted = frame.data.get("members")
+        added = self._add_members(room, wanted)
+
+        # Name the ones that did not work. Skipping them quietly is what made
+        # adding somebody to a room look like it had succeeded when it had
+        # not -- the dialog closed, and nothing happened.
+        missing = [
+            str(name)
+            for name in (wanted if isinstance(wanted, list) else [])
+            if str(name) not in added and str(name) not in self.rooms.members(room)
+        ]
+        if missing:
+            session.send(
+                error("NO_SUCH_USER", f"not registered: {', '.join(sorted(set(missing)))}")
+            )
+        if added:
+            self._broadcast_room_state(room)
 
     def _add_members(self, room: str, members: object) -> list[str]:
         """Join everyone named who actually has an account.
@@ -368,6 +456,12 @@ class MessageRouter:
 
         sender = session.username or ""
         self._record(outgoing, direct_conversation(sender, target), target)
+
+        # Both directions. You clearly know whoever you just messaged, and
+        # they now clearly know you -- otherwise their reply would come from
+        # somebody not in their contacts.
+        self._note_contact(sender, target)
+        self._note_contact(target, sender)
 
         if recipient is not None:
             recipient.send(outgoing)

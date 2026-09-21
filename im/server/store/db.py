@@ -71,6 +71,19 @@ CREATE TABLE IF NOT EXISTS pending (
 
 CREATE INDEX IF NOT EXISTS ix_pending_username
     ON pending (username);
+
+-- Who each person keeps in their contact list. Deliberately one row per
+-- direction: adding somebody does not add you to theirs, and a contact list
+-- that edited itself behind your back would be a surprising thing to own.
+CREATE TABLE IF NOT EXISTS contacts (
+    owner       TEXT    NOT NULL,
+    contact     TEXT    NOT NULL,
+    added_at    INTEGER NOT NULL,
+    PRIMARY KEY (owner, contact)
+);
+
+CREATE INDEX IF NOT EXISTS ix_contacts_owner
+    ON contacts (owner);
 """
 
 

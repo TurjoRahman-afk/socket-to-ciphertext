@@ -13,7 +13,7 @@ from im.server.registries import RoomRegistry, SessionRegistry
 from im.server.router import MessageRouter
 from im.server.store.db import Database
 from im.server.store.messages import MessageStore
-from im.server.store.users import SqliteUsers
+from im.server.store.users import SqliteContacts, SqliteUsers
 
 HASH = "sha256-of-hunter2"
 
@@ -891,3 +891,115 @@ def test_inviting_only_unknown_names_says_so(router) -> None:
     )
 
     assert faiza.last().data["code"] == "NO_SUCH_USER"
+
+
+# ----------------------------------------------------------------- contacts ---
+
+
+@pytest.fixture
+def router_with_contacts() -> MessageRouter:
+    """A router that keeps contacts, which the plain fixture does not."""
+    database = Database()
+    users = SqliteUsers(database, scrypt_n=2)
+    return MessageRouter(
+        SessionRegistry(), RoomRegistry(), users, contacts=SqliteContacts(database)
+    )
+
+
+def test_contacts_survive_a_restart(router_with_contacts) -> None:
+    """The symptom that started this: the contact list was presence, so
+    closing the program emptied it."""
+    router = router_with_contacts
+    faiza = online(router, "faiza")
+    online(router, "aya")
+
+    router.handle(faiza, Frame(type=MessageType.ADD_CONTACT, data={"user": "aya"}))
+
+    assert router.contacts.of("faiza") == ["aya"]
+
+
+def test_login_reports_contacts_who_are_offline(router_with_contacts) -> None:
+    """Being offline is a state to show, not a reason to disappear."""
+    router = router_with_contacts
+    faiza = online(router, "faiza")
+    aya = online(router, "aya")
+    router.handle(faiza, Frame(type=MessageType.ADD_CONTACT, data={"user": "aya"}))
+    router.on_disconnect(aya)
+
+    faiza.outbox.clear()
+    router.on_disconnect(faiza)
+    fresh = FakeSession()
+    log_in(router, fresh, "faiza")
+
+    login_ok = [f for f in fresh.outbox if f.type is MessageType.LOGIN_OK][0]
+    assert login_ok.data["contacts"] == [{"user": "aya", "online": False}]
+
+
+def test_messaging_somebody_adds_them_both_ways(router_with_contacts) -> None:
+    """Messaging a person is the clearest statement that you know them."""
+    router = router_with_contacts
+    faiza = online(router, "faiza")
+    online(router, "aya")
+
+    router.handle(faiza, Frame(type=MessageType.MSG, to="aya", body="hello"))
+
+    assert router.contacts.of("faiza") == ["aya"]
+    assert router.contacts.of("aya") == ["faiza"], "their reply must come from a known name"
+
+
+def test_adding_somebody_who_does_not_exist_says_so(router_with_contacts) -> None:
+    """Silence here is what made adding a room member look like it worked."""
+    router = router_with_contacts
+    faiza = online(router, "faiza")
+
+    router.handle(faiza, Frame(type=MessageType.ADD_CONTACT, data={"user": "nobody"}))
+
+    assert faiza.last().data["code"] == "NO_SUCH_USER"
+    assert router.contacts.of("faiza") == []
+
+
+def test_you_cannot_add_yourself(router_with_contacts) -> None:
+    router = router_with_contacts
+    faiza = online(router, "faiza")
+
+    router.handle(faiza, Frame(type=MessageType.ADD_CONTACT, data={"user": "faiza"}))
+
+    assert faiza.last().data["code"] == "BAD_CONTACT"
+
+
+def test_a_room_is_not_a_contact(router_with_contacts) -> None:
+    router = router_with_contacts
+    faiza = online(router, "faiza")
+
+    router.handle(faiza, Frame(type=MessageType.ADD_CONTACT, data={"user": "#study"}))
+
+    assert faiza.last().data["code"] == "BAD_CONTACT"
+
+
+def test_a_contact_can_be_removed(router_with_contacts) -> None:
+    router = router_with_contacts
+    faiza = online(router, "faiza")
+    online(router, "aya")
+    router.handle(faiza, Frame(type=MessageType.ADD_CONTACT, data={"user": "aya"}))
+
+    router.handle(faiza, Frame(type=MessageType.REMOVE_CONTACT, data={"user": "aya"}))
+
+    assert router.contacts.of("faiza") == []
+
+
+def test_inviting_an_unknown_name_names_it(router_with_contacts) -> None:
+    """The dialog used to close with nothing having happened."""
+    router = router_with_contacts
+    faiza = online(router, "faiza")
+    online(router, "aya")
+    router.handle(faiza, Frame(type=MessageType.CREATE_ROOM, data={"room": "#study"}))
+    quiet(faiza)
+
+    router.handle(
+        faiza,
+        Frame(type=MessageType.INVITE, data={"room": "#study", "members": ["aya", "ghost"]}),
+    )
+
+    assert router.rooms.members("#study") == {"faiza", "aya"}
+    errors = [f for f in faiza.outbox if f.type is MessageType.ERROR]
+    assert errors and "ghost" in errors[-1].data["message"]
