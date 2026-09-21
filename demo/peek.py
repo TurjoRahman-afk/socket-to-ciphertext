@@ -9,8 +9,11 @@ those messages turn out to be unreadable. Nothing about that is arguable.
 
 from __future__ import annotations
 
+import json
 import sqlite3
 import sys
+
+from im.server.store.messages import ENVELOPES
 
 WIDTH = 78
 
@@ -60,13 +63,27 @@ def peek(path: str) -> int:
             f"\n  {row['sender']} -> {row['recipient']}   "
             f"{'ENCRYPTED' if encrypted else 'plaintext'}"
         )
-        print(f"    {row['body']}")
+        if row["nonce"] == ENVELOPES:
+            # A room message is not one ciphertext but one per member.
+            # Showing them separately is the whole point of this script:
+            # the audience can count the envelopes and see that the server
+            # holds every one of them and can open none.
+            envelopes = json.loads(row["body"] or "{}")
+            print(f"    one sealed copy per member, {len(envelopes)} of them:")
+            for member, sealed in sorted(envelopes.items()):
+                print(f"      for {member:<10} {str(sealed[0])[:52]}")
+        else:
+            print(f"    {row['body']}")
+
     if any(row["nonce"] for row in messages):
-        print("\n  -> the encrypted rows are what the server stores and routes.")
-        print("     It has no private key for either party and cannot read them.")
+        print("\n  -> this is what the server stores and routes. It holds no")
+        print("     private key for anybody and cannot read a single row.")
+    if any(row["nonce"] == ENVELOPES for row in messages):
+        print("     A room message is sealed once per member, so there is no")
+        print("     shared key to hand round -- and no single copy to steal.")
     if any(not row["nonce"] for row in messages):
-        print("\n  -> the plaintext rows are room messages, which are not yet")
-        print("     end-to-end encrypted. Stated rather than hidden.")
+        print("\n  -> the plaintext rows were sent with --no-encryption, which")
+        print("     exists so this script has something to contrast against.")
 
     rule("UNDELIVERED  —  waiting for somebody to come back")
     pending = conn.execute(

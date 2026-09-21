@@ -74,6 +74,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--cacert", default="dev.crt", help="certificate to trust when using --tls"
     )
+    parser.add_argument(
+        "--server-hostname",
+        default="localhost",
+        help=(
+            "the name the certificate should match, which is not always the address "
+            "dialled -- a tunnel or a bare IP needs it stated separately"
+        ),
+    )
     parser.add_argument("--quiet", action="store_true", help="log warnings and errors only")
     return parser.parse_args(argv)
 
@@ -109,7 +117,7 @@ def main(argv: list[str] | None = None) -> int:
         digest,
         pubkey=keyring.public_b64 if keyring else None,
         tls=client_context(args.cacert) if args.tls else None,
-        server_hostname="localhost" if args.tls else None,
+        server_hostname=args.server_hostname if args.tls else None,
     )
     controller = ChatController(session, model, keyring=keyring)
 
