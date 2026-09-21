@@ -51,8 +51,19 @@ $ python -m im.client --user alice --password hunter2 --register
 
 Also working: several conversations at once with separate unread counts, so
 you can hold a 1:1 and a room chat side by side and see which has unread
-messages; presence when someone logs in or drops; typing indicators; and
-`/who`, `/chats`, `/history` and `/rooms`.
+messages; presence when someone logs in or drops; typing indicators;
+delivery and read receipts; and `/who`, `/chats`, `/history` and `/rooms`.
+
+**There is a window, too.** `run.bat` opens a server and two chat clients.
+The Tkinter interface does everything the console one does and a few things
+it does not: a contact list that survives a restart, a room dialog that picks
+its members when the room is made, and a search across everything this client
+has decrypted.
+
+**Contacts are people you added**, not whoever happens to be online. Messaging
+somebody adds them, both ways -- otherwise their reply would arrive from a
+name they had never seen -- and the list is stored server-side, so closing the
+program does not empty it.
 
 **It survives a restart.** Accounts, rooms, membership and message history
 live in sqlite. Kill the server, start it again, log back in: anything sent
@@ -267,10 +278,18 @@ a frame, or three frames, or a frame split mid-character. `LineBuffer` in
 [im/common/codec.py](im/common/codec.py) is the only place in the project that
 has to care.
 
-Implemented so far: `REGISTER`, `LOGIN`, `MSG`, `CREATE_ROOM`, `JOIN`,
-`LEAVE`, `TYPING`, `PING`, and the server's `OK`, `LOGIN_OK`, `ACK`,
-`ROOM_STATE`, `PRESENCE`, `PONG`, `ERROR`. Only `HISTORY`, `GET_KEY` and `KEY`
-remain, and they land with persistence and encryption.
+Twenty-four frame types, all implemented.
+
+Client to server: `REGISTER`, `LOGIN`, `GET_KEY`, `MSG`, `CREATE_ROOM`,
+`JOIN`, `LEAVE`, `INVITE`, `ADD_CONTACT`, `REMOVE_CONTACT`, `TYPING`,
+`RECEIPT`, `HISTORY`, `PING`.
+
+Server to client: `OK`, `ERROR`, `LOGIN_OK`, `KEY`, `ACK`, `ROOM_STATE`,
+`CONTACTS`, `HISTORY_RESULT`, `PONG`, `PRESENCE`.
+
+A room `MSG` carries no body of its own. A frame has one body and a room has
+one key per member, so the per-member ciphertexts travel in `data["env"]` and
+the server hands each member only the envelope addressed to them.
 
 The full specification is in
 [docs/protocol.md](docs/protocol.md). Changing anything in it needs agreement
@@ -327,7 +346,7 @@ earlier version of that file claimed room encryption before it existed.
 ## Tests and tooling
 
 ```bash
-pytest                  # 316 tests; a hung test fails after 30s
+pytest                  # 343 tests; a hung test fails after 30s
 pytest --cov            # coverage, for the report
 pytest tests/test_router.py   # routing rules, no sockets, instant
 ruff check .            # lint
@@ -381,10 +400,17 @@ through `im/common/` and the protocol document.
 Stated plainly, because an overclaim a marker can puncture is worth less than
 an honest boundary.
 
-- **Room messages are not encrypted.** A frame carries one body, so a room
-  message would need one ciphertext per member inside it. Direct messages are
-  end-to-end encrypted; room messages are protected by TLS alone, which means
-  the server can read them.
+- **Room encryption does not scale.** A room message is sealed once per
+  member, so a room of five costs five ciphertexts per message. Fine for
+  five, wrong for five hundred, which would want a shared group key rotated
+  on membership change.
+- **Somebody added to a room cannot read what came before.** No envelope was
+  sealed for them. That is what end-to-end encryption means, not a fault.
+- **Search only covers what a client has decrypted.** The server stores
+  ciphertext it holds no key for, so server-side search is impossible rather
+  than merely unimplemented.
+- **Receipts are direct messages only.** A room receipt needs per-member
+  state -- "read by 3 of 5" -- which is a different model.
 - **No forward secrecy.** Compromising a long-term private key exposes past
   messages. Real systems ratchet; this one does not.
 - **No key verification.** A malicious server could substitute its own public
@@ -402,5 +428,6 @@ an honest boundary.
 ## Documentation
 
 - [docs/protocol.md](docs/protocol.md) — the wire format
-- [docs/threat-model.md](docs/threat-model.md) — what the encryption will and will not protect
+- [docs/threat-model.md](docs/threat-model.md) — what the encryption does and does not protect, including where this file was once wrong
 - [docs/design.md](docs/design.md) — the submitted report
+- [docs/demo.md](docs/demo.md) — how to demonstrate it, in the order that makes the point
