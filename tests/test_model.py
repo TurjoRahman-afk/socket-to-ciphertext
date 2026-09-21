@@ -366,3 +366,56 @@ def test_a_snippet_shows_the_word_that_was_searched_for() -> None:
 
     assert "needle" in hit.snippet("needle")
     assert hit.snippet("needle").startswith("...")
+
+
+# ----------------------------------------------------------------- contacts ---
+
+
+def test_contacts_are_separate_from_presence() -> None:
+    """Conflating them is what emptied the contact list on every restart."""
+    model = ChatModel()
+    model.set_identity("turjo")
+
+    model.replace_contacts([{"user": "aya", "online": False}])
+
+    assert "aya" in model.contacts
+    assert not model.is_online("aya")
+
+
+def test_an_offline_contact_is_still_a_contact() -> None:
+    model = ChatModel()
+    model.replace_contacts([{"user": "aya", "online": True}])
+
+    model.set_presence("aya", False)
+
+    assert "aya" in model.contacts, "going offline is not the same as being removed"
+    assert model.contacts["aya"] is False
+
+
+def test_known_users_covers_contacts_and_presence() -> None:
+    """The room dialog reads this. Reading presence alone meant nobody
+    offline could be added to a room."""
+    model = ChatModel()
+    model.set_identity("turjo")
+    model.replace_contacts([{"user": "faiza", "online": False}])
+    model.replace_roster(["aya"])
+
+    assert model.known_users() == ["aya", "faiza"]
+
+
+def test_known_users_puts_online_people_first() -> None:
+    model = ChatModel()
+    model.set_identity("turjo")
+    model.replace_contacts(
+        [{"user": "aya", "online": False}, {"user": "zara", "online": True}]
+    )
+
+    assert model.known_users() == ["zara", "aya"]
+
+
+def test_you_are_never_in_your_own_contact_list() -> None:
+    model = ChatModel()
+    model.set_identity("turjo")
+    model.replace_contacts([{"user": "turjo", "online": True}, {"user": "aya", "online": True}])
+
+    assert model.known_users() == ["aya"]

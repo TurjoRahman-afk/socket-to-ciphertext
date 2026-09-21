@@ -39,6 +39,7 @@ from im.client.controller.chat import ChatController
 from im.client.model.conversation import Message
 from im.client.model.events import (
     ConnectionStateChanged,
+    ContactsChanged,
     ConversationSelected,
     ErrorRaised,
     Event,
@@ -341,8 +342,13 @@ class TkView:
 
     def _new_conversation(self) -> None:
         who = simpledialog.askstring("New message", "Who do you want to talk to?", parent=self.root)
-        if who and who.strip():
-            self.controller.select(who.strip())
+        if not who or not who.strip():
+            return
+        name = who.strip()
+        # Keep them, so the conversation is still reachable after a restart.
+        # The server refuses a name with no account and says so.
+        self.controller.add_contact(name)
+        self.controller.select(name)
 
     def _room_menu(self) -> None:
         """Make a room, with whoever should be in it.
@@ -395,15 +401,13 @@ class TkView:
             self.controller.invite(room, answer[1])
 
     def _contacts(self) -> list[str]:
-        """Everyone we know of, online first.
+        """Everyone we could plausibly message, online first.
 
-        The roster holds people who have been seen this session, whether or
-        not they are still connected -- someone who went offline a minute ago
-        is still a reasonable person to put in a room.
+        Contacts plus anybody seen this session. Reading presence alone is
+        what made this list empty on every restart, and what stopped anybody
+        offline from being added to a room.
         """
-        me = self.model.username
-        names = [name for name in self.model.roster if name != me]
-        return sorted(names, key=lambda name: (not self.model.is_online(name), name.lower()))
+        return self.model.known_users()
 
     @staticmethod
     def _hashed(room: str) -> str:
@@ -474,12 +478,73 @@ class TkView:
         listbox.focus_set()
 
     def _show_contacts(self) -> None:
-        online = self.model.online_users()
-        messagebox.showinfo(
-            "Contacts",
-            "\n".join(f"●  {name}" for name in online) if online else "Nobody else is online.",
-            parent=self.root,
+        """The contact list, with a way to add to it.
+
+        This was a read-only box listing whoever happened to be online, which
+        is presence rather than contacts -- so it was empty on startup and
+        never held anybody you had added.
+        """
+        window = tk.Toplevel(self.root)
+        window.title("Contacts")
+        window.configure(bg=t.PAGE)
+        window.transient(self.root)
+        window.resizable(False, False)
+
+        frame = tk.Frame(window, bg=t.PAGE)
+        frame.pack(fill="both", expand=True, padx=t.px(16), pady=t.px(16))
+
+        listbox = tk.Listbox(
+            frame, bg=t.WHITE, fg=t.BROWN, font=t.BODY, relief="flat",
+            highlightthickness=1, highlightbackground=t.HAIRLINE,
+            selectbackground=t.SELECTED, selectforeground=t.BROWN,
+            width=34, height=10, activestyle="none",
         )
+        listbox.pack(fill="both", expand=True)
+
+        names = self._contacts()
+        if names:
+            for name in names:
+                dot = "●" if self.model.is_online(name) else "○"
+                kept = "" if name in self.model.contacts else "   (not saved)"
+                listbox.insert("end", f" {dot}  {name}{kept}")
+        else:
+            listbox.insert("end", "  Nobody yet. Add somebody below.")
+
+        tk.Label(
+            frame, text="Add someone by username", bg=t.PAGE, fg=t.BROWN,
+            font=t.BODY_BOLD, anchor="w",
+        ).pack(fill="x", pady=(t.px(14), t.px(4)))
+
+        entry = tk.Entry(
+            frame, font=t.BODY, bg=t.WHITE, fg=t.BROWN, relief="flat", width=1,
+            insertbackground=t.BROWN, highlightthickness=1,
+            highlightbackground=t.HAIRLINE, highlightcolor=t.ORANGE,
+        )
+        entry.pack(fill="x", ipady=t.px(5))
+
+        def add(_event: object = None) -> None:
+            name = entry.get().strip()
+            if not name:
+                return
+            # The server answers NO_SUCH_USER when there is no such account,
+            # and that error already reaches the transcript. Nothing is
+            # invented here about whether it worked.
+            self.controller.add_contact(name)
+            window.destroy()
+
+        entry.bind("<Return>", add)
+        PillButton(frame, "Add", add, bg=t.PAGE).pack(fill="x", pady=(t.px(10), 0))
+
+        def open_selected(_event: object = None) -> None:
+            picked = listbox.curselection()
+            if picked and names:
+                self.controller.select(names[picked[0]])
+                window.destroy()
+
+        listbox.bind("<Double-Button-1>", open_selected)
+        window.bind("<Escape>", lambda _e: window.destroy())
+        entry.focus_set()
+
 
     def _show_settings(self) -> None:
         model = self.model
@@ -520,6 +585,8 @@ class TkView:
         elif isinstance(event, ConnectionStateChanged):
             self._set_composer(enabled=event.state == "ONLINE")
             self._draw_me()
+        elif isinstance(event, ContactsChanged):
+            self._refresh_list()
         elif isinstance(event, ErrorRaised):
             self.transcript.notice(f"{event.code}: {event.message}")
 

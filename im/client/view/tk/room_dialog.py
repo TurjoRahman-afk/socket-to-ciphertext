@@ -163,7 +163,34 @@ class RoomDialog(tk.Toplevel):
                 wraplength=WIDTH,
             ).pack(fill="x", pady=(t.px(6), 0))
 
+        self._extra_names(frame)
         self._buttons(frame)
+
+    def _extra_names(self, parent: tk.Misc) -> None:
+        """A field for names that are not in the list.
+
+        The tick list can only offer people this client knows about, and
+        somebody who has never been online in this session is not among them.
+        Without this there was no way to put them in a room at all -- which
+        read as the dialog silently refusing to add anyone.
+        """
+        tk.Label(
+            parent, text="Or type usernames, separated by commas", bg=t.PAGE,
+            fg=t.BROWN, font=t.BODY_BOLD, anchor="w", wraplength=WIDTH,
+        ).pack(fill="x", pady=(t.px(14), t.px(4)))
+
+        self._typed = tk.Entry(
+            parent, font=t.BODY, bg=t.WHITE, fg=t.BROWN, relief="flat", width=1,
+            insertbackground=t.BROWN, highlightthickness=1,
+            highlightbackground=t.HAIRLINE, highlightcolor=t.ORANGE,
+        )
+        self._typed.pack(fill="x", ipady=t.px(5))
+
+        tk.Label(
+            parent,
+            text="A name with no account is reported, not ignored.",
+            bg=t.PAGE, fg=t.MUTED, font=t.TINY, anchor="w", wraplength=WIDTH,
+        ).pack(fill="x", pady=(t.px(4), 0))
 
     def _member_list(self, parent: tk.Misc, contacts: list[str]) -> None:
         """A checkbox per contact, scrolling once there are too many.
@@ -270,8 +297,15 @@ class RoomDialog(tk.Toplevel):
 
     @property
     def selected(self) -> list[str]:
-        """Who is ticked, in the order they were listed."""
-        return [name for name, var in self._checks.items() if var.get()]
+        """Who is ticked, plus anybody typed in, without duplicates."""
+        picked = [name for name, var in self._checks.items() if var.get()]
+        typed = getattr(self, "_typed", None)
+        if typed is not None:
+            for name in typed.get().replace(";", ",").split(","):
+                name = name.strip()
+                if name and name not in picked and name not in self._already_in:
+                    picked.append(name)
+        return picked
 
     def _accept(self) -> None:
         name = self._name_var.get().strip()

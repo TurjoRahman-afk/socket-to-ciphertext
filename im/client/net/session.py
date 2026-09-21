@@ -240,6 +240,12 @@ class Session:
     def invite(self, room: str, members: list[str]) -> None:
         self._live().invite(room, members)
 
+    def add_contact(self, user: str) -> None:
+        self._live().add_contact(user)
+
+    def remove_contact(self, user: str) -> None:
+        self._live().remove_contact(user)
+
     def join(self, room: str) -> None:
         self._live().join(room)
 

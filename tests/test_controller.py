@@ -37,6 +37,12 @@ class FakeConnection:
             data["members"] = list(members)
         self.sent.append(Frame(type=MessageType.CREATE_ROOM, data=data))
 
+    def add_contact(self, user: str) -> None:
+        self.sent.append(Frame(type=MessageType.ADD_CONTACT, data={"user": user}))
+
+    def remove_contact(self, user: str) -> None:
+        self.sent.append(Frame(type=MessageType.REMOVE_CONTACT, data={"user": user}))
+
     def invite(self, room: str, members: list[str]) -> None:
         self.sent.append(
             Frame(type=MessageType.INVITE, data={"room": room, "members": list(members)})
@@ -412,3 +418,41 @@ def test_plaintext_history_still_loads_without_a_keyring() -> None:
     )
 
     assert [m.body for m in model.conversation("bob").messages] == ["hello"]
+
+
+def test_login_ok_loads_the_contact_list(parts) -> None:
+    """Without this the list was rebuilt from presence every start."""
+    _connection, model, controller = parts
+
+    controller.on_frame(
+        Frame(
+            type=MessageType.LOGIN_OK,
+            data={
+                "user": "turjo",
+                "roster": ["aya"],
+                "contacts": [{"user": "faiza", "online": False}],
+            },
+        )
+    )
+
+    assert "faiza" in model.contacts
+    assert model.known_users() == ["aya", "faiza"]
+
+
+def test_a_contacts_frame_replaces_the_list(parts) -> None:
+    _connection, model, controller = parts
+
+    controller.on_frame(
+        Frame(type=MessageType.CONTACTS, data={"contacts": [{"user": "aya", "online": True}]})
+    )
+
+    assert sorted(model.contacts) == ["aya"]
+
+
+def test_adding_a_contact_reaches_the_connection(parts) -> None:
+    connection, _model, controller = parts
+
+    controller.add_contact("faiza")
+
+    assert connection.sent[-1].type is MessageType.ADD_CONTACT
+    assert connection.sent[-1].data["user"] == "faiza"

@@ -104,6 +104,17 @@ class ErrorRaised:
     message: str
 
 
+@dataclass(frozen=True, slots=True)
+class ContactsChanged:
+    """The contact list changed.
+
+    Names only. Presence rides on RosterReplaced and PresenceChanged, so
+    there is one source of truth for who is online.
+    """
+
+    contacts: tuple[str, ...]
+
+
 #: Anything the model may emit. A view narrows on this.
 Event = (
     IdentityEstablished
@@ -118,4 +129,5 @@ Event = (
     | ConversationSelected
     | ConnectionStateChanged
     | ErrorRaised
+    | ContactsChanged
 )

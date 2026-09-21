@@ -327,6 +327,13 @@ class ServerConnection:
             data["members"] = list(members)
         self.send(Frame(type=MessageType.CREATE_ROOM, data=data))
 
+    def add_contact(self, user: str) -> None:
+        """Keep somebody, so they are still there after a restart."""
+        self.send(Frame(type=MessageType.ADD_CONTACT, data={"user": user}))
+
+    def remove_contact(self, user: str) -> None:
+        self.send(Frame(type=MessageType.REMOVE_CONTACT, data={"user": user}))
+
     def invite(self, room: str, members: list[str]) -> None:
         """Add people to a room that already exists."""
         self.send(

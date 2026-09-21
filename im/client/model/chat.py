@@ -25,6 +25,7 @@ from dataclasses import replace
 from im.client.model.conversation import Conversation, Message, SearchHit
 from im.client.model.events import (
     ConnectionStateChanged,
+    ContactsChanged,
     ConversationSelected,
     ErrorRaised,
     Event,
@@ -48,7 +49,12 @@ class ChatModel:
     def __init__(self) -> None:
         self.username: str | None = None
         self.connection_state: str = "DISCONNECTED"
+        # Presence: who is connected this second.
         self.roster: dict[str, bool] = {}
+        # Contacts: who this person knows, online or not. Kept apart from the
+        # roster on purpose -- conflating them is what made the contact list
+        # empty itself on every restart.
+        self.contacts: dict[str, bool] = {}
         self.conversations: dict[str, Conversation] = {}
         self.rooms: dict[str, tuple[str, ...]] = {}
         self.typing: dict[str, set[str]] = {}
@@ -98,7 +104,35 @@ class ChatModel:
                 self.roster[name] = False
         self._emit(RosterReplaced(tuple(sorted(self.roster))))
 
+    def replace_contacts(self, contacts: list[dict]) -> None:
+        """The contact list as the server last reported it."""
+        fresh = {
+            str(entry.get("user")): bool(entry.get("online"))
+            for entry in contacts
+            if entry.get("user")
+        }
+        if fresh == self.contacts:
+            return
+        self.contacts = fresh
+        # A contact who is online is also on the roster, so presence stays in
+        # one place and the two cannot disagree.
+        for name, online in fresh.items():
+            self.roster.setdefault(name, online)
+        self._emit(ContactsChanged(tuple(sorted(self.contacts))))
+
+    def known_users(self) -> list[str]:
+        """Everyone this client could plausibly message, online first.
+
+        Contacts and anybody seen this session, together. The room dialog and
+        the contacts view both want this rather than raw presence.
+        """
+        me = self.username
+        names = {name for name in (*self.contacts, *self.roster) if name and name != me}
+        return sorted(names, key=lambda name: (not self.is_online(name), name.lower()))
+
     def set_presence(self, user: str, online: bool) -> None:
+        if user in self.contacts:
+            self.contacts[user] = online
         if self.roster.get(user) is online:
             return
         self.roster[user] = online

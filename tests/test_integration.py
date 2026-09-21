@@ -447,6 +447,8 @@ def test_a_session_forwards_everything_a_connection_can_send() -> None:
         "history",
         "create_room",
         "invite",
+        "add_contact",
+        "remove_contact",
         "join",
         "leave",
         "ping",

@@ -165,6 +165,12 @@ class ChatController:
     def invite(self, room: str, members: list[str]) -> None:
         self.connection.invite(room, members)
 
+    def add_contact(self, user: str) -> None:
+        self.connection.add_contact(user)
+
+    def remove_contact(self, user: str) -> None:
+        self.connection.remove_contact(user)
+
     def join(self, room: str) -> None:
         self.connection.join(room)
 
@@ -192,6 +198,8 @@ class ChatController:
             self._key(frame)
         elif frame.type is MessageType.HISTORY_RESULT:
             self._history_result(frame)
+        elif frame.type is MessageType.CONTACTS:
+            self.model.replace_contacts(frame.data.get("contacts") or [])
         elif frame.type is MessageType.ROOM_STATE:
             self._room_state(frame)
         elif frame.type is MessageType.LOGIN_OK:
@@ -402,3 +410,4 @@ class ChatController:
             self.model.set_identity(str(username))
         roster = frame.data.get("roster") or []
         self.model.replace_roster([str(name) for name in roster])
+        self.model.replace_contacts(frame.data.get("contacts") or [])
