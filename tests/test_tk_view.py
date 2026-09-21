@@ -333,3 +333,23 @@ def test_the_dialog_agrees_with_the_server_about_names() -> None:
     assert name_problem("study group") is not None
     assert name_problem("#") is not None
     assert name_problem("x" * 40) is not None
+
+
+def test_the_search_window_lists_hits_and_opens_one(view) -> None:
+    """Search is client-side because it has to be: the server holds
+    ciphertext it has no key for."""
+    from im.client.model.conversation import Message
+
+    view.model.add_message(
+        "aya", Message(id="1", sender="aya", body="the meeting is Friday", ts=1, mine=False)
+    )
+    hits = view.model.search("friday")
+    assert hits
+
+    view._show_hits("friday", hits)
+
+    windows = [w for w in view.root.winfo_children() if isinstance(w, tk.Toplevel)]
+    assert windows, "the search window should be open"
+    listbox = [w for w in windows[0].winfo_children() if isinstance(w, tk.Listbox)][0]
+    assert "Friday" in listbox.get(0)
+    windows[0].destroy()

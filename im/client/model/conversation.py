@@ -63,3 +63,27 @@ class Conversation:
 
     def __len__(self) -> int:
         return len(self.messages)
+
+
+@dataclass(frozen=True)
+class SearchHit:
+    """One message found by a search, and which conversation it was in."""
+
+    key: str
+    message: Message
+
+    def snippet(self, query: str, width: int = 60) -> str:
+        """The match with a little of the text either side of it.
+
+        A hit list showing the first 60 characters of each message would
+        often not show the word that was searched for, which makes the
+        results look wrong even when they are right.
+        """
+        body = self.message.body
+        at = body.casefold().find(query.strip().casefold())
+        if at < 0:
+            return body[:width]
+
+        start = max(0, at - width // 3)
+        end = min(len(body), start + width)
+        return ("..." if start else "") + body[start:end] + ("..." if end < len(body) else "")

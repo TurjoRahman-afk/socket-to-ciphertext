@@ -307,3 +307,62 @@ def test_my_rooms_is_empty_before_logging_in(model: ChatModel) -> None:
 def test_roster_replacement_reports_everyone_known(model: ChatModel, seen: list) -> None:
     model.replace_roster(["carol", "bob"])
     assert RosterReplaced(("bob", "carol")) in seen
+
+
+# ---------------------------------------------------------------- searching ---
+
+
+def stocked() -> ChatModel:
+    model = ChatModel()
+    model.set_identity("turjo")
+    for key, texts in {
+        "aya": ["the meeting is on Friday", "bring your laptop"],
+        "#study": ["Friday works for me", "see you all there"],
+    }.items():
+        for i, text in enumerate(texts):
+            model.add_message(
+                key, Message(id=f"{key}{i}", sender="aya", body=text, ts=100 + i, mine=False)
+            )
+    return model
+
+
+def test_search_finds_messages_across_conversations() -> None:
+    hits = stocked().search("friday")
+
+    assert {hit.key for hit in hits} == {"aya", "#study"}
+
+
+def test_search_ignores_case() -> None:
+    assert stocked().search("FRIDAY")
+    assert stocked().search("fRiDaY")
+
+
+def test_search_returns_newest_first() -> None:
+    hits = stocked().search("o")  # matches several
+
+    assert [hit.message.ts for hit in hits] == sorted(
+        [hit.message.ts for hit in hits], reverse=True
+    )
+
+
+def test_an_empty_query_finds_nothing() -> None:
+    """Otherwise every message in every conversation is a hit."""
+    assert stocked().search("") == []
+    assert stocked().search("   ") == []
+
+
+def test_search_respects_its_limit() -> None:
+    assert len(stocked().search("e", limit=2)) == 2
+
+
+def test_a_snippet_shows_the_word_that_was_searched_for() -> None:
+    """A hit list showing the first 60 characters would often not contain the
+    match, which makes correct results look wrong."""
+    model = ChatModel()
+    body = "x" * 200 + " needle " + "y" * 200
+    model.add_message("aya", Message(id="1", sender="aya", body=body, ts=1, mine=False))
+
+    hit = model.search("needle")[0]
+
+    assert "needle" in hit.snippet("needle")
+    assert hit.snippet("needle").startswith("...")

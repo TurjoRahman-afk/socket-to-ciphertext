@@ -138,6 +138,7 @@ class TkView:
             ("chats", "💬", "Chats", lambda: None),
             ("contacts", "👥", "Contacts", self._show_contacts),
             ("rooms", "#", "Rooms", self._room_menu),
+            ("search", "🔍", "Search", self._search),
             ("settings", "⚙", "Settings", self._show_settings),
         ):
             item = NavItem(rail, icon, label, command)
@@ -408,6 +409,69 @@ class TkView:
     def _hashed(room: str) -> str:
         room = room.strip()
         return room if room.startswith("#") else f"#{room}"
+
+    def _search(self) -> None:
+        """Find a message, and jump to where it was said.
+
+        Client-side, and it can only be client-side: the server holds
+        ciphertext it has no key for. What is searchable is what this client
+        has loaded, so unloaded scrollback is offered as a history fetch
+        rather than silently missed.
+        """
+        query = simpledialog.askstring("Search", "Find messages containing:", parent=self.root)
+        if not query or not query.strip():
+            return
+
+        hits = self.model.search(query)
+        if not hits:
+            messagebox.showinfo(
+                "Search",
+                f"Nothing loaded here contains {query.strip()!r}.\n\n"
+                "Only messages this client has loaded can be searched -- the "
+                "server stores ciphertext it cannot read. Open a conversation "
+                "and scroll back to load more.",
+                parent=self.root,
+            )
+            return
+
+        self._show_hits(query.strip(), hits)
+
+    def _show_hits(self, query: str, hits: list) -> None:
+        """A list of matches; picking one opens that conversation."""
+        window = tk.Toplevel(self.root)
+        window.title(f"{len(hits)} matches for {query!r}")
+        window.configure(bg=t.PAGE)
+        window.transient(self.root)
+
+        listbox = tk.Listbox(
+            window,
+            bg=t.WHITE,
+            fg=t.BROWN,
+            font=t.BODY,
+            relief="flat",
+            highlightthickness=0,
+            selectbackground=t.SELECTED,
+            selectforeground=t.BROWN,
+            width=64,
+            height=min(len(hits), 14),
+            activestyle="none",
+        )
+        listbox.pack(fill="both", expand=True, padx=t.px(14), pady=t.px(14))
+
+        for hit in hits:
+            who = "you" if hit.message.mine else hit.message.sender
+            listbox.insert("end", f"{hit.key}  --  {who}:  {hit.snippet(query)}")
+
+        def open_selected(_event: object = None) -> None:
+            picked = listbox.curselection()
+            if picked:
+                self.controller.select(hits[picked[0]].key)
+                window.destroy()
+
+        listbox.bind("<Double-Button-1>", open_selected)
+        listbox.bind("<Return>", open_selected)
+        window.bind("<Escape>", lambda _e: window.destroy())
+        listbox.focus_set()
 
     def _show_contacts(self) -> None:
         online = self.model.online_users()

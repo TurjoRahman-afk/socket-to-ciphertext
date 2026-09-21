@@ -22,7 +22,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import replace
 
-from im.client.model.conversation import Conversation, Message
+from im.client.model.conversation import Conversation, Message, SearchHit
 from im.client.model.events import (
     ConnectionStateChanged,
     ConversationSelected,
@@ -185,6 +185,34 @@ class ChatModel:
 
     def unread_total(self) -> int:
         return sum(c.unread for c in self.conversations.values())
+
+    # ---------------------------------------------------------------- search ---
+
+    def search(self, query: str, limit: int = 100) -> list[SearchHit]:
+        """Every loaded message containing `query`, newest first.
+
+        Deliberately client-side. The server cannot do this: since room
+        messages are sealed per member and direct messages per pair, what it
+        stores is ciphertext it holds no key for. Searching it would mean
+        either giving the server the keys or giving up the encryption, and
+        the point of the encryption is that neither happens.
+
+        The cost is that only what this client has loaded is searchable --
+        request history for a conversation first and it becomes so. That
+        trade is inherent to end-to-end encryption, not an oversight.
+        """
+        needle = query.strip().casefold()
+        if not needle:
+            return []
+
+        hits = [
+            SearchHit(key=key, message=message)
+            for key, conversation in self.conversations.items()
+            for message in conversation.messages
+            if needle in message.body.casefold()
+        ]
+        hits.sort(key=lambda hit: hit.message.ts, reverse=True)
+        return hits[:limit]
 
     def keys(self) -> list[str]:
         """Open conversations, rooms first so they do not get lost in a list
