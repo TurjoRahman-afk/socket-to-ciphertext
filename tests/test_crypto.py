@@ -272,11 +272,11 @@ def test_a_relabelled_sender_fails_to_decrypt(alice: Identity, bob: Identity) ->
         b.open("alice", ciphertext, nonce, "carol")
 
 
-def test_rooms_are_not_encryptable_yet() -> None:
-    """A frame carries one body, so a room message would need one ciphertext
-    per member inside it. Named as a limitation rather than pretended."""
+def test_rooms_are_encryptable_too() -> None:
+    """Sealed once per member. This asserted the opposite until room
+    encryption was implemented."""
     assert Keyring.encryptable("bob")
-    assert not Keyring.encryptable("#general")
+    assert Keyring.encryptable("#general")
 
 
 def test_a_changed_key_discards_the_derived_one(alice: Identity, bob: Identity) -> None:
@@ -287,3 +287,77 @@ def test_a_changed_key_discards_the_derived_one(alice: Identity, bob: Identity) 
     ring.remember("bob", Identity.generate().public_b64)
 
     assert ring._key("bob") != first
+
+
+# --------------------------------------------------------------- room sealing ---
+
+
+def test_a_room_message_is_sealed_once_per_member(alice: Identity, bob: Identity) -> None:
+    carol = Identity.generate()
+    ring = Keyring(alice, me="alice")
+    ring.remember("bob", bob.public_b64)
+    ring.remember("carol", carol.public_b64)
+
+    envelopes = ring.seal_for_members(["bob", "carol"], "friday at six", "alice")
+
+    assert envelopes is not None
+    assert set(envelopes) == {"alice", "bob", "carol"}, "the sender gets a copy too"
+
+
+def test_each_member_can_open_only_their_own_envelope(alice: Identity, bob: Identity) -> None:
+    carol = Identity.generate()
+    sender = Keyring(alice, me="alice")
+    sender.remember("bob", bob.public_b64)
+    sender.remember("carol", carol.public_b64)
+    envelopes = sender.seal_for_members(["bob", "carol"], "friday at six", "alice")
+
+    bobs = Keyring(bob, me="bob")
+    bobs.remember("alice", alice.public_b64)
+    ciphertext, nonce = envelopes["bob"]
+    assert bobs.open("alice", ciphertext, nonce, "alice") == "friday at six"
+
+    # Carol's envelope is not Bob's to read.
+    other, other_nonce = envelopes["carol"]
+    with pytest.raises(DecryptionFailed):
+        bobs.open("alice", other, other_nonce, "alice")
+
+
+def test_the_sender_can_reopen_their_own_room_message(alice: Identity, bob: Identity) -> None:
+    """Without this, your own room history is unreadable after a restart."""
+    ring = Keyring(alice, me="alice")
+    ring.remember("bob", bob.public_b64)
+
+    envelopes = ring.seal_for_members(["bob"], "friday at six", "alice")
+    ciphertext, nonce = envelopes["alice"]
+
+    assert ring.open("alice", ciphertext, nonce, "alice") == "friday at six"
+
+
+def test_sealing_a_room_is_all_or_nothing(alice: Identity, bob: Identity) -> None:
+    """Sending only to the members we hold keys for would drop the rest out
+    of the conversation with no sign that it had happened."""
+    ring = Keyring(alice, me="alice")
+    ring.remember("bob", bob.public_b64)
+
+    assert ring.seal_for_members(["bob", "carol"], "hello", "alice") is None
+
+
+def test_missing_keys_names_who_is_not_reachable(alice: Identity, bob: Identity) -> None:
+    ring = Keyring(alice, me="alice")
+    ring.remember("bob", bob.public_b64)
+
+    assert ring.missing_keys(["bob", "carol", "dave"]) == ["carol", "dave"]
+
+
+def test_two_members_never_share_a_nonce(alice: Identity, bob: Identity) -> None:
+    """They do not share a key either, and that pairing is what makes nonce
+    reuse catastrophic rather than merely untidy."""
+    carol = Identity.generate()
+    ring = Keyring(alice, me="alice")
+    ring.remember("bob", bob.public_b64)
+    ring.remember("carol", carol.public_b64)
+
+    envelopes = ring.seal_for_members(["bob", "carol"], "hello", "alice")
+    nonces = [nonce for _ciphertext, nonce in envelopes.values()]
+
+    assert len(set(nonces)) == len(nonces)

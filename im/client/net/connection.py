@@ -278,9 +278,21 @@ class ServerConnection:
             self.close()
             raise NotConnected("the server is not keeping up; connection dropped") from None
 
-    def message(self, to: str, body: str, nonce: str | None = None) -> Frame:
-        """Send a chat message. `body` is plaintext until phase 6."""
-        frame = Frame(type=MessageType.MSG, to=to, body=body, nonce=nonce)
+    def message(
+        self,
+        to: str,
+        body: str,
+        nonce: str | None = None,
+        envelopes: dict[str, list[str]] | None = None,
+    ) -> Frame:
+        """Send a chat message.
+
+        A direct message carries one body and one nonce. A room message
+        carries neither, and instead carries `env`: the same text sealed once
+        per member, because a frame has one body and a room has several keys.
+        """
+        data = {"env": envelopes} if envelopes else {}
+        frame = Frame(type=MessageType.MSG, to=to, body=body, nonce=nonce, data=data)
         self.send(frame)
         return frame
 

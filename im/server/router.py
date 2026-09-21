@@ -11,12 +11,19 @@ never confusingly wrong about both at once.
 
 from __future__ import annotations
 
+import json
 import logging
 
 from im.common.frames import Frame, MessageType, error
 from im.common.ids import now_ms
 from im.server.registries import RoomRegistry, Session, SessionRegistry
-from im.server.store.messages import DELIVERED, READ, MessageStore, direct_conversation
+from im.server.store.messages import (
+    DELIVERED,
+    ENVELOPES,
+    READ,
+    MessageStore,
+    direct_conversation,
+)
 from im.server.store.users import SqliteUsers
 
 log = logging.getLogger(__name__)
@@ -336,7 +343,12 @@ class MessageRouter:
         )
 
         if target.startswith(ROOM_PREFIX):
-            delivered = self._to_room(session, target, outgoing)
+            # A room message carries one sealed body per member rather than
+            # one body, because a room has one key per member.
+            envelopes = frame.data.get("env")
+            delivered = self._to_room(
+                session, target, outgoing, envelopes if isinstance(envelopes, dict) else None
+            )
         else:
             delivered = self._to_user(session, target, outgoing)
 
@@ -364,7 +376,13 @@ class MessageRouter:
             log.info("queued a message for %s, who is offline", target)
         return True
 
-    def _to_room(self, session: Session, room: str, outgoing: Frame) -> bool:
+    def _to_room(
+        self,
+        session: Session,
+        room: str,
+        outgoing: Frame,
+        envelopes: dict | None = None,
+    ) -> bool:
         if not self.rooms.exists(room):
             session.send(error("NO_SUCH_ROOM", f"{room} does not exist"))
             return False
@@ -372,24 +390,70 @@ class MessageRouter:
         members = self.rooms.members(room)
         if session.username not in members:
             # Otherwise anyone could shout into any room they could name,
-            # without ever appearing in its member list.
+            # member or not.
             session.send(error("NOT_A_MEMBER", f"join {room} before sending to it"))
             return False
 
-        self._record(outgoing, room, room)
+        # Stored once, whatever the shape. An encrypted room message keeps the
+        # whole per-member map in the row, so history can hand each reader the
+        # envelope addressed to them -- the server never holds a key for any
+        # of them and cannot read a single one.
+        if envelopes is not None:
+            self._record_envelopes(outgoing, room, envelopes)
+        else:
+            self._record(outgoing, room, room)
 
         for name in sorted(members):
             if name == session.username:
                 continue  # The sender already has their own message.
             member = self.sessions.get(name)
+            addressed = self._addressed_to(outgoing, envelopes, name)
+            if addressed is None:
+                # No envelope for this member: they joined after the message
+                # was sealed, so nobody encrypted anything to them. That is
+                # what end-to-end encryption means, not a delivery failure.
+                continue
             if member is not None:
-                member.send(outgoing)
+                member.send(addressed)
             elif self.messages is not None:
                 # Stored once above; this only notes who still owes a
                 # delivery, so a room of five costs one row per absentee
                 # rather than five copies of the message.
                 self.messages.queue_for(name, outgoing.id)
         return True
+
+    @staticmethod
+    def _addressed_to(outgoing: Frame, envelopes: dict | None, member: str) -> Frame | None:
+        """The copy of a room message that one member can open."""
+        if envelopes is None:
+            return outgoing
+        sealed = envelopes.get(member)
+        if not isinstance(sealed, list) or len(sealed) != 2:
+            return None
+        body, nonce = sealed
+        return Frame(
+            type=MessageType.MSG,
+            sender=outgoing.sender,
+            to=outgoing.to,
+            body=str(body),
+            nonce=str(nonce),
+            id=outgoing.id,
+            ts=outgoing.ts,
+        )
+
+    def _record_envelopes(self, outgoing: Frame, room: str, envelopes: dict) -> None:
+        """Store a room message as the whole per-member map, in one row."""
+        if self.messages is None:
+            return
+        self.messages.record(
+            message_id=outgoing.id,
+            conversation=room,
+            sender=outgoing.sender or "",
+            recipient=room,
+            body=json.dumps(envelopes, separators=(",", ":")),
+            nonce=ENVELOPES,
+            ts=outgoing.ts,
+        )
 
     def _record(self, outgoing: Frame, conversation: str, recipient: str) -> None:
         if self.messages is None:
@@ -445,40 +509,70 @@ class MessageRouter:
                 data={
                     "room": target,
                     "messages": [
-                        {
-                            "id": row["id"],
-                            "from": row["sender"],
-                            # The real recipient, not the requester's view of
-                            # the conversation -- the client already has that
-                            # from the "room" field beside this list.
-                            "to": row["recipient"],
-                            "body": row["body"],
-                            "n": row["nonce"],
-                            "ts": row["ts"],
-                            "state": (
-                                READ
-                                if row["read_at"]
-                                else (DELIVERED if row["delivered_at"] else "SENT")
-                            ),
-                        }
-                        for row in rows
+                        entry
+                        for entry in (
+                            self._history_entry(row, session.username or "") for row in rows
+                        )
+                        if entry is not None
                     ],
                 },
             )
         )
+
+    @staticmethod
+    def _history_entry(row, reader: str) -> dict | None:
+        """One stored row, as the reader is allowed to see it.
+
+        A room row holds one ciphertext per member. The reader gets theirs and
+        nobody else's; a reader with no envelope in the row joined after it
+        was sent, and there is genuinely nothing there they can decrypt, so
+        the row is left out rather than sent as something unreadable.
+        """
+        body, nonce = row["body"], row["nonce"]
+
+        if nonce == ENVELOPES:
+            try:
+                envelopes = json.loads(body or "{}")
+            except ValueError:
+                log.warning("a stored room row did not parse; skipping it")
+                return None
+            sealed = envelopes.get(reader)
+            if not isinstance(sealed, list) or len(sealed) != 2:
+                return None
+            body, nonce = str(sealed[0]), str(sealed[1])
+
+        return {
+            "id": row["id"],
+            "from": row["sender"],
+            # The real recipient, not the requester's view of the
+            # conversation -- the client already has that from the "room"
+            # field beside this list.
+            "to": row["recipient"],
+            "body": body,
+            "n": nonce,
+            "ts": row["ts"],
+            "state": (
+                READ if row["read_at"] else (DELIVERED if row["delivered_at"] else "SENT")
+            ),
+        }
 
     def _flush_pending(self, session: Session, username: str) -> None:
         """Hand over everything that arrived while this user was away."""
         if self.messages is None:
             return
         for row in self.messages.flush(username):
+            # The same per-member split as history: a room message waiting for
+            # somebody offline is stored once, as the whole map.
+            entry = self._history_entry(row, username)
+            if entry is None:
+                continue
             session.send(
                 Frame(
                     type=MessageType.MSG,
                     sender=row["sender"],
                     to=row["recipient"],
-                    body=row["body"],
-                    nonce=row["nonce"],
+                    body=entry["body"],
+                    nonce=entry["n"],
                     id=row["id"],
                     ts=row["ts"],
                 )

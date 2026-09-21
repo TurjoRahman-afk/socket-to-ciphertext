@@ -22,6 +22,12 @@ from im.server.store.db import Database
 PAIR_SEPARATOR = "\x1f"
 
 #: The three states a message can be in, from the sender's point of view.
+#: Written into a row's nonce column to mark that its body is not one
+#: ciphertext but a JSON map of one ciphertext per member. A room message has
+#: several recipients and therefore several keys; the row is stored once and
+#: split per reader on the way out.
+ENVELOPES = "*"
+
 SENT = "SENT"
 DELIVERED = "DELIVERED"
 READ = "READ"

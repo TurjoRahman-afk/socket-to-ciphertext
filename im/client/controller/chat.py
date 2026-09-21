@@ -54,7 +54,13 @@ class ChatController:
 
         me = self.model.username or "me"
 
-        if self.keyring is not None and self.keyring.encryptable(target):
+        if self.keyring is None:
+            frame = self.connection.message(target, text)
+        elif target.startswith(ROOM_PREFIX):
+            frame = self._send_to_room(target, text, me)
+            if frame is None:
+                return None
+        else:
             sealed = self.keyring.seal(target, text, me)
             if sealed is None:
                 # No key yet. Ask for one and hold the message rather than
@@ -64,8 +70,6 @@ class ChatController:
                 return None
             ciphertext, nonce = sealed
             frame = self.connection.message(target, ciphertext, nonce=nonce)
-        else:
-            frame = self.connection.message(target, text)
 
         # The model always holds plaintext. A view renders what was typed,
         # not what went on the wire.
@@ -73,12 +77,37 @@ class ChatController:
         self.model.add_message(target, message)
         return message
 
-    def _hold(self, target: str, text: str) -> None:
-        """Queue a message until the recipient's public key arrives."""
+    def _send_to_room(self, room: str, text: str, me: str) -> Frame | None:
+        """Seal one room message once per member, or hold it until we can.
+
+        A frame carries one body and a room has one key per member, so the
+        ciphertexts travel beside the frame rather than in it.
+        """
+        members = [name for name in self.model.room_members(room)]
+        missing = self.keyring.missing_keys([name for name in members if name != me])
+        if missing:
+            # Every member or none. Sending to the ones whose keys we happen
+            # to hold would drop the rest out of the conversation silently.
+            self._hold(room, text, fetch=missing)
+            return None
+
+        envelopes = self.keyring.seal_for_members(members, text, me)
+        if envelopes is None:
+            self._hold(room, text, fetch=members)
+            return None
+        return self.connection.message(room, "", envelopes=envelopes)
+
+    def _hold(self, target: str, text: str, fetch: list[str] | None = None) -> None:
+        """Queue a message until the keys needed to seal it arrive.
+
+        `fetch` names whose keys to ask for, which for a room is every member
+        rather than the room itself -- a room has no key of its own.
+        """
         first = target not in self._held
         self._held.setdefault(target, []).append(text)
         if first:
-            self.connection.get_key(target)
+            for user in fetch if fetch is not None else [target]:
+                self.connection.get_key(user)
 
     def _release(self, user: str) -> None:
         """Send whatever was waiting on this person's key."""
@@ -197,16 +226,22 @@ class ChatController:
         # An encrypted message from somebody whose key we do not hold yet
         # cannot be read. Ask for the key and keep the frame rather than
         # showing the user an error they can do nothing about.
+        # Whose key opens this? For a direct message it is the person who
+        # sent it, which is also the conversation. For a room it is still the
+        # sender -- the room has no key of its own.
+        peer = frame.sender or key
+
         if (
             self.keyring is not None
             and frame.nonce
-            and self.keyring.encryptable(key)
-            and not self.keyring.knows(key)
+            and peer
+            and peer != self.model.username
+            and not self.keyring.knows(peer)
         ):
-            first = key not in self._awaiting
-            self._awaiting.setdefault(key, []).append(frame)
+            first = peer not in self._awaiting
+            self._awaiting.setdefault(peer, []).append(frame)
             if first:
-                self.connection.get_key(key)
+                self.connection.get_key(peer)
             return
 
         self._file(frame, key)
@@ -227,7 +262,7 @@ class ChatController:
             Message(
                 id=frame.id,
                 sender=frame.sender or "?",
-                body=self._plaintext(frame, key),
+                body=self._plaintext(frame, frame.sender or key),
                 ts=frame.ts or now_ms(),
                 mine=False,
             ),
@@ -251,10 +286,21 @@ class ChatController:
         self._release(str(user))
         self._deliver_awaiting(str(user))
 
+        # A room was waiting on *every* member's key, so the last one to
+        # arrive is what unblocks it -- and it does not arrive under the
+        # room's name.
+        for room in [key for key in self._held if key.startswith(ROOM_PREFIX)]:
+            if not self.keyring.missing_keys(
+                [name for name in self.model.room_members(room) if name != self.model.username]
+            ):
+                self._release(room)
+
     def _deliver_awaiting(self, user: str) -> None:
         """Decrypt and show what arrived before we had this person's key."""
         for frame in self._awaiting.pop(user, []):
-            self._file(frame, user)
+            target = frame.to or ""
+            key = target if target.startswith(ROOM_PREFIX) else user
+            self._file(frame, key)
 
     def _plaintext(self, frame: Frame, peer: str) -> str:
         """The readable body of an inbound message.

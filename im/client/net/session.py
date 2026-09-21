@@ -213,8 +213,14 @@ class Session:
             raise NotConnected("not connected")
         return connection
 
-    def message(self, to: str, body: str, nonce: str | None = None) -> Frame:
-        return self._live().message(to, body, nonce=nonce)
+    def message(
+        self,
+        to: str,
+        body: str,
+        nonce: str | None = None,
+        envelopes: dict[str, list[str]] | None = None,
+    ) -> Frame:
+        return self._live().message(to, body, nonce=nonce, envelopes=envelopes)
 
     def typing(self, to: str, on: bool = True) -> None:
         self._live().typing(to, on)
