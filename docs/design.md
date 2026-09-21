@@ -36,10 +36,12 @@ TCP socket at one end to end-to-end encryption at the other.
 | Delivery and read receipts | `RECEIPT` frames, three states | done, direct messages only |
 | Graphical user interface | `im/client/view/tk/` (Tkinter) | done |
 | Reconnection | `im/client/net/session.py`, exponential backoff | done |
-| Encryption | X25519 + HKDF + AES-GCM; TLS optional | done for direct messages; **rooms are plaintext** |
+| Encryption | X25519 + HKDF + AES-GCM; TLS optional | done, direct messages and rooms |
+| Message search | `ChatModel.search`, client-side | done -- see 6.5 |
 
-The last row is a genuine gap and is stated plainly here and in
-`docs/threat-model.md` rather than glossed. See §6.
+Room encryption was the last gap to close. The order it happened in -- claimed,
+corrected to admit it was false, then made true -- is recorded in §9.3 rather
+than smoothed over.
 
 ---
 
@@ -266,18 +268,39 @@ on the network; it does **not** protect anything from the server, because that
 is where it terminates. It is enabled with `--tls` and is **off by default**,
 including in `run.bat`.
 
-### 6.4 What this does not protect -- stated plainly
+### 6.4 Rooms
 
-- **Room messages are not encrypted at all.** `Keyring.encryptable()` returns
-  `False` for room targets, so the room path sends plaintext, and the database
-  stores plaintext. The honest fix is to seal once per member; it is not
-  implemented.
+A frame carries one body and a room has one key per member, so a room message
+is sealed once per member and the ciphertexts travel beside the frame in
+`data["env"]`. The server hands each member their own envelope and stores the
+whole map in one row; it holds no key for any of them.
+
+Three properties fall out of that, and all three are consequences rather than
+choices:
+
+- A fresh nonce per member as well as per message. Two members share no key,
+  and it is that pairing which makes nonce reuse catastrophic.
+- Sealing is all or nothing. Encrypting only to the members whose keys we
+  hold would drop the rest out of the conversation silently.
+- Someone added later cannot read what came before. No envelope was sealed
+  for them. That is what end-to-end encryption means, not a delivery failure.
+
+One ciphertext per member per message is fine for five and wrong for five
+hundred, which would want a shared group key rotated on membership change.
+
+### 6.5 What this does not protect -- stated plainly
+
+- **Metadata.** The server knows who talks to whom and when, because it
+  routes. With every body sealed, this is the largest remaining exposure.
+- **Server-side search is impossible**, not merely unimplemented. Searching
+  what the server stores would mean handing it the keys. Search therefore
+  runs client-side over what has been decrypted, and a miss says so.
 - No forward secrecy; no key verification; no at-rest protection of the local
-  key file; metadata is visible to the server throughout.
+  key file; TLS off unless asked for.
 
-`docs/threat-model.md` carries the full table, split by direct message versus
-room. An earlier revision of that file wrongly claimed rooms were encrypted
-per member; the correction is recorded there rather than quietly made.
+`docs/threat-model.md` carries the full table. That file was wrong once -- it
+claimed per-member room encryption before it existed -- and its header keeps
+the sequence rather than tidying it away.
 
 ---
 
@@ -309,17 +332,17 @@ Two kinds of test, deliberately separated:
 - **Integration tests with sockets.** A real server on an ephemeral port, real
   clients, real reconnection.
 
-**298 tests**, all passing.
+**316 tests**, all passing.
 
 | Count | File | Covers |
 |------:|------|--------|
 | 74 | `test_router.py` | every routing rule, no network |
-| 34 | `test_model.py` | conversations, unread, presence |
+| 40 | `test_model.py` | conversations, unread, presence, search |
+| 31 | `test_controller.py` | frames ↔ model translation, decryption |
 | 30 | `test_store.py` | sqlite, scrypt, history ordering |
-| 26 | `test_controller.py` | frames ↔ model translation |
+| 30 | `test_crypto.py` | key agreement, sealing per member, tampering |
 | 25 | `test_codec.py` | framing, split reads, multi-byte splits |
-| 24 | `test_crypto.py` | key agreement, sealing, tampering |
-| 19 | `test_tk_view.py` | the window and the room dialog |
+| 20 | `test_tk_view.py` | the window, the room dialog, search |
 | 19 | `test_connection_state.py` | the FSM |
 | 19 | `test_connection.py` | client connection behaviour |
 | 16 | `test_integration.py` | real sockets end to end |
@@ -379,6 +402,27 @@ Worth recording because they were invisible to the test suite:
 Both were found by the throughput benchmark reporting 0 of 2,000 delivered,
 and both are now fixed and covered.
 
+### 8.4 Three bugs the tests could not see
+
+A pattern worth naming, because all three have the same shape: **the tests
+each covered one side of a boundary, and nothing covered the boundary.**
+
+| Bug | Why every test passed |
+|---|---|
+| `Session` did not forward `receipt`, `invite`, or `create_room`'s members | Controller tests used a fake with every method; integration tests drove `ServerConnection` directly. Nothing used the class the GUI actually holds. |
+| History was never decrypted -- scrollback rendered as base64 | Controller tests fed plaintext rows; integration tests ran without a keyring. The one combination that breaks -- encryption on *and* history requested -- was never exercised. |
+| `RoomDialog`'s `Entry` was bound to the wrong attribute | The test set the variable directly instead of typing into the field, so it passed while the field did nothing. |
+
+None produced an error message. The first was silent because the app runs
+under `pythonw`, which has no stderr for Tk to write a traceback to; the
+second because base64 is a valid string; the third because Tk accepts any
+string as a `textvariable`.
+
+Three things came out of it: a test comparing `Session`'s sending surface to
+`ServerConnection`'s method by method, `report_callback_exception` installed
+so no Tk callback fails silently again, and a habit of running the real stack
+and reading the output rather than trusting green tests.
+
 ---
 
 ## 9. Evaluation
@@ -391,24 +435,31 @@ and a client reconnects on its own when the server comes back.
 
 ### 9.2 What does not
 
-- **Room messages are plaintext.** The most significant gap.
+- **Metadata is unprotected.** Inherent to a routing hub, not a bug.
 - **Receipts are direct-message only.** Room receipts need per-member state --
   "read by 3 of 5" -- which is a different model, not a bigger version of
   this one.
 - **One process.** See §8.2.
-- **No media, search, push notifications or multi-device.**
+- **Search covers only what a client has loaded**, by construction (6.5).
+- **No media, push notifications or multi-device.**
 
 ### 9.3 What we would do differently -- **[write this yourselves]**
 
 Suggested honest material, in your own words:
 
-- The `Session` forwarding bug in §5 is the best lesson in the project: a hand-
-  maintained list drifted, and *the tests all passed* because every test used
-  either a fake with all the methods or the class underneath. Tests that do
-  not cross the seam do not test the seam.
-- The GUI was built last on purpose, and that decision paid off.
-- Room encryption should have been settled when direct-message encryption was,
-  rather than deferred and then mis-described in the threat model.
+- **Tests that do not cross a seam do not test the seam.** §8.4 lists three
+  bugs that every test passed through. This is the single most transferable
+  thing the project taught.
+- **A security document is the worst place to guess.** The threat model
+  claimed room messages were encrypted per member when they were plaintext.
+  It was corrected to say so, and only then was the gap actually closed. The
+  sequence is kept in that file's header deliberately.
+- **Encryption forecloses options, and that is the point.** Sealing rooms
+  made server-side search impossible -- not harder, impossible. Recognising
+  that as a consequence rather than a regression is what §6.5 is for.
+- The GUI was built last on purpose, and that decision paid off: the model
+  and controller were fully exercised through a console view before a single
+  widget existed.
 
 ### 9.4 Individual contributions -- **[write this yourselves]**
 
@@ -436,7 +487,7 @@ Suggested honest material, in your own words:
 ## Reproducing everything in this report
 
 ```bash
-pytest                    # 298 tests
+pytest                    # 316 tests
 python -m demo.bench      # the measurements in §8.2
 run.bat fresh             # a server and two chat windows, empty database
 python -m demo.peek im.db # what the server actually stored
