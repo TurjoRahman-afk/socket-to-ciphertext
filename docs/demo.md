@@ -170,13 +170,13 @@ which is exactly why that is a separate flag from `--host`.
 
 **"Why threads and not asyncio?"**
 Chat is I/O-bound, so a thread blocked in `recv()` costs nothing but memory.
-The measured ceiling is about 374 connections on one process — and the fan-out
-latency barely moves between 50 and 374, so what breaks is 1,872 OS threads,
+The measured ceiling is about 388 connections on one process — and the fan-out
+latency barely moves between 50 and 388, so what breaks is 1,954 OS threads,
 not the routing. Millions of connections means async I/O and many processes,
 which is a different architecture and is named as such in the report.
 
 **"How fast is it?"**
-p50 delivery 0.54ms, stored and delivered. About 6,000 messages a second
+p50 delivery 0.55ms, stored and delivered. About 4,000 messages a second
 through one server. Reproduce with `python -m demo.bench`.
 
 **"What does it not protect?"**

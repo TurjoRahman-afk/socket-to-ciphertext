@@ -346,7 +346,7 @@ earlier version of that file claimed room encryption before it existed.
 ## Tests and tooling
 
 ```bash
-pytest                  # 343 tests; a hung test fails after 30s
+pytest                  # 352 tests; a hung test fails after 30s
 pytest --cov            # coverage, for the report
 pytest tests/test_router.py   # routing rules, no sockets, instant
 ruff check .            # lint

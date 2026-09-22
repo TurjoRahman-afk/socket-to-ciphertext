@@ -19,12 +19,37 @@ TCP socket at one end to end-to-end encryption at the other.
 
 ---
 
+## 0. What changed since the last submission
+
+This is the *revised* design, so what was revised is worth stating plainly.
+Each row is a decision that changed, not a feature that was added.
+
+| Was | Is now | Why it changed |
+|---|---|---|
+| Room messages in plaintext, documented as a limitation | Sealed once per member | A frame carries one body and a room has one key per member, so the ciphertexts travel beside the frame in `data["env"]`. Documenting the gap was honest; closing it was better. |
+| `CREATE_ROOM` took a room name only | Takes an optional member list, and `INVITE` was added | Milestone 1 specified `room_name, members`; a later revision dropped it, which left no way to start a room with anybody in it. Restored. |
+| "Contacts" meant whoever was online | Contacts are stored per user, with presence shown separately | Presence and acquaintance are two different ideas that had been given one name, so the list emptied itself on every restart. |
+| Search was not implemented | Client-side search | Not a free choice: sealing the rooms made server-side search **impossible**, because the server holds ciphertext it has no key for. The constraint came first and the design followed it. |
+| Receipts existed in the protocol only | Delivery and read receipts end to end | Direct messages only; room receipts need per-member state, which is a different model. |
+| One interface (console) | Console and Tkinter, interchangeable | The model was built without a view on purpose, and this is the test of that claim. |
+
+Two things were **not** changed, deliberately:
+
+- **Thread-per-connection stays.** The measurements (§8.2) show the ceiling
+  is OS threads rather than the protocol, and moving to async I/O would have
+  replaced the part of the project the brief is actually about.
+- **Newline-delimited JSON stays.** It costs bytes and parse time, and
+  neither is the bottleneck at this scale (§8.2). Being able to read the
+  wire during a demo was worth more.
+
+---
+
 ## 1. Requirements
 
 | Requirement | Where it is satisfied | Status |
 |---|---|---|
 | Client/server over TCP sockets | `im/server/server.py`, `im/client/net/connection.py` | done |
-| Multiple simultaneous clients | thread-per-connection, `im/server/handler.py` | done, measured to 374 |
+| Multiple simultaneous clients | thread-per-connection, `im/server/handler.py` | done, measured to 388 |
 | Application-level protocol | `im/common/frames.py`, `im/common/codec.py` | done, 21 frame types |
 | User accounts and authentication | `im/server/store/users.py` (scrypt) | done |
 | Direct messaging | `MessageRouter._message` | done |
@@ -332,7 +357,9 @@ Two kinds of test, deliberately separated:
 - **Integration tests with sockets.** A real server on an ephemeral port, real
   clients, real reconnection.
 
-**316 tests**, all passing.
+**352 tests**, all passing, with 83% statement coverage of `im/`.
+The full breakdown and the reasoning behind it is in
+[docs/testing-report.md](testing-report.md).
 
 | Count | File | Covers |
 |------:|------|--------|
@@ -350,7 +377,7 @@ Two kinds of test, deliberately separated:
 | 3 | `test_package.py` | packaging, interpreter guard |
 | 2 | `test_model_has_no_tkinter.py` | the architectural boundary |
 
-Roughly 5,700 lines of source to 3,800 lines of tests.
+6,860 lines of source to 4,481 lines of tests.
 
 ### 8.2 Measurements
 
@@ -361,8 +388,8 @@ server otherwise idle.
 
 | Path | min | p50 | p95 | p99 | max |
 |---|---|---|---|---|---|
-| `PING` → `PONG` | 0.50ms | 0.54ms | 0.65ms | 1.10ms | 1.20ms |
-| `alice` → `bob` | 0.48ms | 0.54ms | 0.65ms | 1.03ms | 1.06ms |
+| `PING` → `PONG` | 0.49ms | 0.55ms | 0.69ms | 1.06ms | 1.39ms |
+| `alice` → `bob` | 0.51ms | 0.55ms | 0.69ms | 1.12ms | 1.31ms |
 
 A message is stored *and* delivered in well under a millisecond. Over a real
 network the link adds 10-40ms, so the server is not what a user perceives as
@@ -370,22 +397,22 @@ delay until it is heavily loaded.
 
 **Throughput**
 
-25 senders × 200 messages = 5,000 messages, all received, in 0.81s →
-**6,168 messages/second** through one server. Every one is written to sqlite
+25 senders × 200 messages = 5,000 messages, all received, in 1.23s →
+**4,061 messages/second** through one server. Every one is written to sqlite
 before delivery, so this is the storage rate as much as the routing rate.
 
 **Concurrent connections**
 
 | Clients | Connected | Time | Server threads | Fan-out |
 |--------:|----------:|-----:|---------------:|--------:|
-| 50 | 50 | 0.55s | 252 | 1.4ms |
-| 100 | 100 | 1.25s | 502 | 1.3ms |
-| 200 | 200 | 2.79s | 1,002 | 1.7ms |
-| 400 | **374** | 7.78s | 1,872 | 1.8ms |
+| 50 | 50 | 0.55s | 252 | 1.5ms |
+| 100 | 100 | 1.21s | 502 | 1.2ms |
+| 200 | 200 | 3.24s | 1,002 | 1.7ms |
+| 400 | **388** | 10.00s | 1,954 | 1.9ms |
 
 **The ceiling is the thread model, not the protocol.** Fan-out latency barely
-moves from 50 to 374 clients -- routing is not what breaks. What breaks is
-1,872 OS threads in one process. Reaching millions of connections would mean
+moves from 50 to 388 clients -- routing is not what breaks. What breaks is
+1,954 OS threads in one process. Reaching millions of connections would mean
 replacing thread-per-connection with async I/O and running many processes
 behind a load balancer, with shared state moved out of process. That is a
 different architecture, and it is named here rather than claimed.
@@ -487,7 +514,7 @@ Suggested honest material, in your own words:
 ## Reproducing everything in this report
 
 ```bash
-pytest                    # 316 tests
+pytest                    # 352 tests
 python -m demo.bench      # the measurements in §8.2
 run.bat fresh             # a server and two chat windows, empty database
 python -m demo.peek im.db # what the server actually stored
