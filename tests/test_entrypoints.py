@@ -7,6 +7,12 @@ wiring around it: arguments parsed, banner printed, shutdown always run.
 
 from __future__ import annotations
 
+import os
+import pathlib
+import subprocess
+import sys
+import tempfile
+
 import im.client.__main__ as client_main
 import im.server.__main__ as server_main
 from im.server.server import ChatServer
@@ -84,3 +90,44 @@ def test_a_password_never_leaves_the_client_in_the_clear() -> None:
     assert len(digest) == 64  # sha256, hex
     assert digest == client_main.hash_password("hunter2")  # stable
     assert digest != client_main.hash_password("hunter3")
+
+
+def test_the_doctor_runs_and_reports() -> None:
+    """The diagnostic is what somebody runs when nothing else works, so it
+    must not be the thing that is broken."""
+    result = subprocess.run(
+        [sys.executable, "-m", "tools.doctor"],
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+
+    assert "why will the window not open" in result.stdout
+    assert "tkinter is importable" in result.stdout
+    # 0 when the machine is healthy, 1 when it found something. Either is a
+    # working diagnostic; a crash is not.
+    assert result.returncode in (0, 1)
+
+
+def test_asking_for_a_window_without_tkinter_explains_itself() -> None:
+    """A Python built without Tcl/Tk runs the console view perfectly and
+    cannot open a window. The message should say that, not show a traceback
+    about tkinter to somebody who never mentioned tkinter."""
+    with tempfile.TemporaryDirectory() as tmp:
+        pathlib.Path(tmp, "tkinter.py").write_text(
+            "raise ImportError('No module named _tkinter')\n", encoding="utf-8"
+        )
+        result = subprocess.run(
+            [sys.executable, "-m", "im.client", "--view", "tk",
+             "--user", "aya", "--password", "demo"],
+            capture_output=True,
+            text=True,
+            timeout=120,
+            env={**os.environ, "PYTHONPATH": tmp},
+        )
+
+    output = result.stdout + result.stderr
+    assert "The window cannot open on this machine" in output
+    assert "--view console" in output, "it should point at the view that does work"
+    assert "tools.doctor" in output
+    assert "Traceback" not in output, "a traceback is not an explanation"

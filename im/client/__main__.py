@@ -124,7 +124,21 @@ def main(argv: list[str] | None = None) -> int:
     # The only line that differs between the two interfaces. Everything
     # below this point is identical, which is the MVC claim made concrete.
     if args.view == "tk":
-        from im.client.view.tk import TkView
+        try:
+            from im.client.view.tk import TkView
+        except ImportError as exc:
+            # A Python built without Tcl/Tk runs the console view perfectly
+            # and cannot open a window at all. Say which of those is
+            # happening, rather than showing a traceback about tkinter to
+            # somebody who never mentioned tkinter.
+            raise SystemExit(
+                f"  The window cannot open on this machine: {exc}\n\n"
+                "  This Python has no tkinter. The console client still works:\n\n"
+                "      python -m im.client --view console "
+                f"--user {username} --password ...\n\n"
+                "  For the diagnosis and how to fix it:\n\n"
+                "      python -m tools.doctor\n"
+            ) from exc
 
         view = TkView(controller)
     else:

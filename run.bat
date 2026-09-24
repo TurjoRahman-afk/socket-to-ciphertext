@@ -3,12 +3,13 @@ REM  Open the whole thing: one server and two chat windows.
 REM
 REM      run.bat            two windows, aya and keisha
 REM      run.bat fresh      the same, but wipe the database first
+REM      run.bat check      diagnose why the windows will not open
 REM
 REM  Close the server window to stop everything. The clients will notice and
 REM  sit in RETRYING until it comes back, which is worth watching.
 
-REM change the current directory to the run.bat directory 
-cd /d "%~dp0"   
+REM change the current directory to the run.bat directory
+cd /d "%~dp0"
 
 if not exist ".venv\Scripts\python.exe" (
   echo   The virtual environment is missing. Run this first:
@@ -19,6 +20,39 @@ if not exist ".venv\Scripts\python.exe" (
   echo.
   pause
   exit /b 1
+)
+
+if /i "%~1"=="check" (
+  .venv\Scripts\python.exe -m tools.doctor
+  pause
+  exit /b 0
+)
+
+REM  Can this machine open a window at all? The client is launched below with
+REM  pythonw.exe, which has no console, so a missing tkinter would produce no
+REM  window and no error whatsoever -- just nothing. Ask now, with a console
+REM  still attached, so the failure has somewhere to print.
+.venv\Scripts\python.exe -c "import tkinter" 2>nul
+if errorlevel 1 (
+  echo.
+  echo   This Python has no tkinter, so the window cannot open. The console
+  echo   client still works.
+  echo.
+  echo   Windows: re-run the Python installer, choose Modify, tick
+  echo            "tcl/tk and IDLE", then delete .venv and make it again.
+  echo.
+  echo   For the full diagnosis:   run.bat check
+  echo.
+  pause
+  exit /b 1
+)
+
+REM  run.bat used to check for python.exe and then launch pythonw.exe without
+REM  ever checking that one existed.
+set "PYW=.venv\Scripts\pythonw.exe"
+if not exist "%PYW%" (
+  echo   pythonw.exe is missing, so each client will keep a console window.
+  set "PYW=.venv\Scripts\python.exe"
 )
 
 if /i "%~1"=="fresh" (
@@ -37,13 +71,15 @@ timeout /t 2 /nobreak >nul
 
 echo   Opening two chat windows...
 REM  pythonw, so each window has no console behind it.
-start "" ".venv\Scripts\pythonw.exe" -m im.client --view tk --user aya --password demo --register
+start "" "%PYW%" -m im.client --view tk --user aya --password demo --register
 timeout /t 1 /nobreak >nul
-start "" ".venv\Scripts\pythonw.exe" -m im.client --view tk --user keisha --password demo --register
+start "" "%PYW%" -m im.client --view tk --user keisha --password demo --register
 
 echo.
 echo   Two windows should be open, signed in as aya and keisha.
 echo   In one of them: New Message, type the other name, then talk.
+echo.
+echo   If no window appeared:   run.bat check
 echo.
 echo   To see what the server actually stored:
 echo       .venv\Scripts\python.exe -m demo.peek im.db
